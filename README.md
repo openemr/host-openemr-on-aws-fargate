@@ -120,17 +120,37 @@ After entering username and password we should be able to get access to the Open
 
 ![alt text](./docs/OpenEMR.png)
 
-# Architecture and Cost
+# Architecture
 
 This solution uses a variety of AWS services including [Amazon ECS](https://aws.amazon.com/ecs/), [AWS Fargate](https://aws.amazon.com/fargate/), [AWS WAF](https://aws.amazon.com/waf/), [Amazon CloudWatch](https://aws.amazon.com/cloudwatch/). For a full list you can review the cdk stack. Architecture diagram below shows how this solution comes together.
 
 ![alt text](./docs/Architecture.png)
 
+# Customizing Architecture Attributes
 
-Even though it will depend on a lot of factors such as traffic and storage, this solution costs around ~220$ per month based on our experiments. Majority of the costs will be incurred by Fargate and RDS. Feel free to change the RDS database to a smaller instance to reduce the cost even more.
+There are some additional parameters you can set in `cdk.json` that you can use to customize some attributes of your architecture.
 
-![alt text](./docs/Cost.png)
+ * `elasticache_cache_node_type`          The cache node type used by Elasticache. Defaults to "cache.t3.small".
+ * `fargate_minimum_capacity`       Minimum number of fargate tasks running in your ECS cluster. Defaults to 3.
+ * `fargate_maximum_capacity`      Maximum number of fargate tasks running in your ECS cluster. Defaults to 100.
+ * `fargate_cpu_autoscaling_percentage`        Percent of average CPU utilization across your ECS cluster that will trigger an autoscaling event. Defaults to 40.
+ * `fargate_ram_autoscaling_percentage`        Percent of average RAM utilization across your ECS cluster that will trigger an autoscaling event. Defaults to 40.
 
+# Using ECS Exec
+
+This architecture allows you to use ECS Exec to get a root command line prompt on a running container. 
+
+For more instructions on how to use ECS Exec see [here](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-exec.html#ecs-exec-enabling-and-using).
+
+For an example of a command that could be run either in [AWS CloudShell](https://docs.aws.amazon.com/cloudshell/latest/userguide/welcome.html) or elsewhere to get root access to a container see the code below:
+
+```
+aws ecs execute-command --cluster $name_of_ecs_cluster \
+    --task $arn_of_fargate_task \
+    --container openemr \
+    --interactive \
+    --command "/bin/sh"
+```
 
 # Regarding Security
 

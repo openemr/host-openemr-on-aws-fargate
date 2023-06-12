@@ -16,6 +16,11 @@
   },
   "context": {
     "security_group_ip_range": null,
+    "elasticache_cache_node_type": "cache.t3.small",
+    "fargate_minimum_capacity": 3,
+    "fargate_maximum_capacity": 100,
+    "fargate_cpu_autoscaling_percentage": 40,
+    "fargate_ram_autoscaling_percentage": 40,
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
     "@aws-cdk/core:checkSecretUsage": true,
     "@aws-cdk/core:target-partitions": [
