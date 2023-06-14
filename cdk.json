@@ -20,7 +20,8 @@
     "fargate_minimum_capacity": 3,
     "fargate_maximum_capacity": 100,
     "fargate_cpu_autoscaling_percentage": 40,
-    "fargate_ram_autoscaling_percentage": 40,
+    "fargate_memory_autoscaling_percentage": 40,
+    "enable_ecs_exec": "true",
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
     "@aws-cdk/core:checkSecretUsage": true,
     "@aws-cdk/core:target-partitions": [

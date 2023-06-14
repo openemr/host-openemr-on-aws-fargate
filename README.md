@@ -134,11 +134,12 @@ There are some additional parameters you can set in `cdk.json` that you can use 
  * `fargate_minimum_capacity`       Minimum number of fargate tasks running in your ECS cluster. Defaults to 3.
  * `fargate_maximum_capacity`      Maximum number of fargate tasks running in your ECS cluster. Defaults to 100.
  * `fargate_cpu_autoscaling_percentage`        Percent of average CPU utilization across your ECS cluster that will trigger an autoscaling event. Defaults to 40.
- * `fargate_ram_autoscaling_percentage`        Percent of average RAM utilization across your ECS cluster that will trigger an autoscaling event. Defaults to 40.
+ * `fargate_memory_autoscaling_percentage`        Percent of average memory utilization across your ECS cluster that will trigger an autoscaling event. Defaults to 40.
+ * `enable_ecs_exec`          Can be used to toggle ECS Exec functionality. Set to a value other than "true" to disable this functionality. Please note that this should generally be disabled while running in production for most workloads. Defaults to "true".
 
 # Using ECS Exec
 
-This architecture allows you to use ECS Exec to get a root command line prompt on a running container. 
+This architecture allows you to use ECS Exec to get a root command line prompt on a running container. Please note that this should generally be disabled while running in production for most workloads. For information on how to toggle this functionality see the `enable_ecs_exec` parameter in the `Customizing Architecture Attributes` section of this documentation.
 
 For more instructions on how to use ECS Exec see [here](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-exec.html#ecs-exec-enabling-and-using).
 

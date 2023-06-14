@@ -20,7 +20,6 @@ from aws_cdk import (
     ArnFormat
 )
 from constructs import Construct
-import boto3
 
 class OpenemrEcsStack(Stack):
 
@@ -29,6 +28,7 @@ class OpenemrEcsStack(Stack):
 
         self.cidr = "10.0.0.0/16"
         self.mysql_port = 3306
+        self.redis_port = 6379
         self._create_vpc()
         self._create_security_groups()
         self._create_elb_log_bucket()
@@ -90,6 +90,8 @@ class OpenemrEcsStack(Stack):
         self.elb_log_bucket = s3.Bucket(
             self,
             "elb-logs-bucket",
+            auto_delete_objects=True,
+            removal_policy=RemovalPolicy.DESTROY,
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
             encryption=s3.BucketEncryption.S3_MANAGED,
             enforce_ssl=True,
@@ -210,7 +212,6 @@ class OpenemrEcsStack(Stack):
             )
         )
 
-
     def _create_redis_cluster(self):
 
         private_subnets_ids = [ps.subnet_id for ps in self.vpc.private_subnets]
@@ -272,40 +273,47 @@ class OpenemrEcsStack(Stack):
         )
 
     def _create_ecs_cluster(self):
+        if self.node.try_get_context("enable_ecs_exec") == "true":
+            #create a key and give cloudwatch logs and s3 permissions to use it
+            self.kms_key = kms.Key(self, "KmsKey",enable_key_rotation=True)
+            self.kms_key.grant_encrypt_decrypt(iam.ServicePrincipal("logs."+self.region+".amazonaws.com"))
+            self.kms_key.grant_encrypt_decrypt(iam.ServicePrincipal("s3.amazonaws.com"))
 
-        #create a key and give cloudwatch logs and s3 permissions to use it
-        self.kms_key = kms.Key(self, "KmsKey")
-        self.kms_key.grant_encrypt_decrypt(iam.ServicePrincipal("logs."+self.region+".amazonaws.com"))
-        self.kms_key.grant_encrypt_decrypt(iam.ServicePrincipal("s3.amazonaws.com"))
+            # Pass the KMS key in the `encryptionKey` field to associate the key to the log group
+            self.ecs_exec_group = logs.LogGroup(self, "LogGroup",
+                                      encryption_key=self.kms_key
+                                      )
 
-        # Pass the KMS key in the `encryptionKey` field to associate the key to the log group
-        self.ecs_exec_group = logs.LogGroup(self, "LogGroup",
-                                  encryption_key=self.kms_key
+            # Pass the KMS key in the `encryptionKey` field to associate the key to the S3 bucket
+            self.exec_bucket = s3.Bucket(self, "EcsExecBucket",
+                                    auto_delete_objects=True,
+                                    removal_policy=RemovalPolicy.DESTROY,
+                                    block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+                                    encryption_key=self.kms_key,
+                                    enforce_ssl=True,
+                                    versioned=True
+                                    )
+
+            self.ecs_cluster = ecs.Cluster(self, "ecs-cluster",
+                                  vpc=self.vpc,
+                                  container_insights=True,
+                                  execute_command_configuration=ecs.ExecuteCommandConfiguration(
+                                      kms_key=self.kms_key,
+                                      log_configuration=ecs.ExecuteCommandLogConfiguration(
+                                          cloud_watch_log_group=self.ecs_exec_group,
+                                          cloud_watch_encryption_enabled=True,
+                                          s3_bucket=self.exec_bucket,
+                                          s3_encryption_enabled=True,
+                                          s3_key_prefix="exec-command-output"
+                                      ),
+                                      logging=ecs.ExecuteCommandLogging.OVERRIDE,
                                   )
-
-        # Pass the KMS key in the `encryptionKey` field to associate the key to the S3 bucket
-        self.exec_bucket = s3.Bucket(self, "EcsExecBucket",
-                                block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
-                                encryption_key=self.kms_key,
-                                enforce_ssl=True,
-                                versioned=True
-                                )
-
-        self.ecs_cluster = ecs.Cluster(self, "ecs-cluster",
-                              vpc=self.vpc,
-                              container_insights=True,
-                              execute_command_configuration=ecs.ExecuteCommandConfiguration(
-                                  kms_key=self.kms_key,
-                                  log_configuration=ecs.ExecuteCommandLogConfiguration(
-                                      cloud_watch_log_group=self.ecs_exec_group,
-                                      cloud_watch_encryption_enabled=True,
-                                      s3_bucket=self.exec_bucket,
-                                      s3_encryption_enabled=True,
-                                      s3_key_prefix="exec-command-output"
-                                  ),
-                                  logging=ecs.ExecuteCommandLogging.OVERRIDE,
-                              )
-                              )
+                                  )
+        else:
+            self.ecs_cluster = ecs.Cluster(self, "ecs-cluster",
+                                  vpc=self.vpc,
+                                  container_insights=True
+                                  )
         self.ecs_cluster.node.add_dependency(self.db_instance)
 
     def _create_efs_volume(self):
@@ -447,41 +455,43 @@ class OpenemrEcsStack(Stack):
         openemr_service = openemr_application_load_balanced_fargate_service.service
 
         #Set up ECS Exec for Debuggging
-        cfn_openemr_service = openemr_service.node.default_child
-        cfn_openemr_service.add_property_override("EnableExecuteCommand", "True")
-        openemr_fargate_task_definition.task_role.add_to_policy(
-            iam.PolicyStatement(
-                actions=["ssmmessages:CreateControlChannel",
-                         "ssmmessages:CreateDataChannel",
-                         "ssmmessages:OpenControlChannel",
-                         "ssmmessages:OpenDataChannel",],
-                resources=["*"])
-        )
-        openemr_fargate_task_definition.task_role.add_to_policy(
-            iam.PolicyStatement(
-                actions=["s3:PutObject",
-                         "s3:GetEncryptionConfiguration"],
-                resources=[self.exec_bucket.bucket_arn,
-                           self.exec_bucket.bucket_arn+'/*'])
-        )
-        openemr_fargate_task_definition.task_role.add_to_policy(
-            iam.PolicyStatement(
-                actions=["logs:DescribeLogGroups"],
-                resources=["*"])
-        )
-        openemr_fargate_task_definition.task_role.add_to_policy(
-            iam.PolicyStatement(
-                actions=["logs:CreateLogStream",
-                         "logs:DescribeLogStreams",
-                         "logs:PutLogEvents"],
-                resources=[self.ecs_exec_group.log_group_arn])
-        )
-        openemr_fargate_task_definition.task_role.add_to_policy(
-            iam.PolicyStatement(
-                actions=["kms:Decrypt",
-                         "kms:GenerateDataKey"],
-                resources=[self.kms_key.key_arn])
-        )
+        if self.node.try_get_context("enable_ecs_exec") == "true":
+            cfn_openemr_service = openemr_service.node.default_child
+            cfn_openemr_service.add_property_override("EnableExecuteCommand", "True")
+            openemr_fargate_task_definition.task_role.add_to_policy(
+                iam.PolicyStatement(
+                    actions=["ssmmessages:CreateControlChannel",
+                             "ssmmessages:CreateDataChannel",
+                             "ssmmessages:OpenControlChannel",
+                             "ssmmessages:OpenDataChannel",],
+                    resources=["*"])
+            )
+            openemr_fargate_task_definition.task_role.add_to_policy(
+                iam.PolicyStatement(
+                    actions=["s3:PutObject",
+                             "s3:GetEncryptionConfiguration"],
+                    resources=[self.exec_bucket.bucket_arn,
+                               self.exec_bucket.bucket_arn+'/*'])
+            )
+            openemr_fargate_task_definition.task_role.add_to_policy(
+                iam.PolicyStatement(
+                    actions=["logs:DescribeLogGroups"],
+                    resources=["*"])
+            )
+            openemr_fargate_task_definition.task_role.add_to_policy(
+                iam.PolicyStatement(
+                    actions=["logs:CreateLogStream",
+                             "logs:DescribeLogStreams",
+                             "logs:PutLogEvents"],
+                    resources=[self.ecs_exec_group.log_group_arn])
+            )
+            openemr_fargate_task_definition.task_role.add_to_policy(
+                iam.PolicyStatement(
+                    actions=["kms:Decrypt",
+                             "kms:GenerateDataKey"],
+                    resources=[self.kms_key.key_arn])
+            )
+
         openemr_fargate_task_definition.task_role.add_to_policy(
             iam.PolicyStatement(
                 actions=["acm:ImportCertificate"],
@@ -506,8 +516,8 @@ class OpenemrEcsStack(Stack):
         openemr_service.connections.allow_from(self.db_instance,ec2.Port.tcp(self.mysql_port))
         openemr_service.connections.allow_to(self.db_instance,ec2.Port.tcp(self.mysql_port))
 
-        openemr_service.connections.allow_from(self.redis_sec_group, ec2.Port.tcp(6379))
-        openemr_service.connections.allow_to(self.redis_sec_group, ec2.Port.tcp(6379))
+        openemr_service.connections.allow_from(self.redis_sec_group, ec2.Port.tcp(self.redis_port))
+        openemr_service.connections.allow_to(self.redis_sec_group, ec2.Port.tcp(self.redis_port))
 
         #Add CPU utilization based autoscaling
         openemr_scalable_target = (
@@ -522,7 +532,7 @@ class OpenemrEcsStack(Stack):
         )
 
         openemr_scalable_target.scale_on_memory_utilization(
-            "OpenEMRRAMScaling", target_utilization_percent=self.node.try_get_context("fargate_ram_autoscaling_percentage")
+            "OpenEMRMemoryScaling", target_utilization_percent=self.node.try_get_context("fargate_memory_autoscaling_percentage")
         )
 
     def _create_waf(self):
