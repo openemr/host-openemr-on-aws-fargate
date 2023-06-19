@@ -152,6 +152,14 @@ The certificate used must be a public certificate. For documentation on how to i
 
 One of the advantages of issuing a certificate from AWS Certificate Manager is that AWS Certificate Manager provides managed renewal for AWS issued TLS/SSL certificates. For documentation on managed renewal in AWS Certificate Manager see [here](https://docs.aws.amazon.com/acm/latest/userguide/managed-renewal.html).
 
+# How AWS Backup is Used in this Architecture
+
+This architecture comes set up to use [AWS Backup](https://aws.amazon.com/backup/) and has automatic backups set up for both AWS EFSs and the RDS database.
+
+The backup plan used is `daily_weekly_monthly7_year_retention` which will take daily, weekly and monthly backups with 7 year retention.
+
+For documentation on AWS Backup see [here](https://docs.aws.amazon.com/aws-backup/latest/devguide/whatisbackup.html).
+
 # How AppMesh is Used in this Architecture
 
 This architecture comes set up to use [AWS AppMesh](https://aws.amazon.com/app-mesh/) out of the box. This is used to provide certificates to enable TLS communication between the load balancer and ECS tasks that will run the application code.
