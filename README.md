@@ -131,11 +131,50 @@ This solution uses a variety of AWS services including [Amazon ECS](https://aws.
 There are some additional parameters you can set in `cdk.json` that you can use to customize some attributes of your architecture.
 
  * `elasticache_cache_node_type`          The cache node type used by Elasticache. Defaults to "cache.t3.small".
- * `fargate_minimum_capacity`       Minimum number of fargate tasks running in your ECS cluster. Defaults to 3.
- * `fargate_maximum_capacity`      Maximum number of fargate tasks running in your ECS cluster. Defaults to 100.
- * `fargate_cpu_autoscaling_percentage`        Percent of average CPU utilization across your ECS cluster that will trigger an autoscaling event. Defaults to 40.
- * `fargate_memory_autoscaling_percentage`        Percent of average memory utilization across your ECS cluster that will trigger an autoscaling event. Defaults to 40.
+ * `openemr_service_fargate_minimum_capacity`       Minimum number of fargate tasks running in your ECS cluster for your ECS service running OpenEMR. Defaults to 3.
+ * `openemr_service_fargate_maximum_capacity`      Maximum number of fargate tasks running in your ECS cluster for your ECS service running OpenEMR. Defaults to 100.
+ * `openemr_service_fargate_cpu_autoscaling_percentage`        Percent of average CPU utilization across your ECS cluster that will trigger an autoscaling event for your ECS service running OpenEMR. Defaults to 40.
+ * `openemr_service_fargate_memory_autoscaling_percentage`        Percent of average memory utilization across your ECS cluster that will trigger an autoscaling event for your ECS service running OpenEMR. Defaults to 40.
+ * `proxy_service_fargate_minimum_capacity`       Minimum number of fargate tasks running in your ECS cluster for your ECS service running your virtual gateway. Defaults to 3.
+ * `proxy_service_fargate_maximum_capacity`      Maximum number of fargate tasks running in your ECS cluster for your ECS service running your virtual gateway. Defaults to 100.
+ * `proxy_service_fargate_cpu_autoscaling_percentage`        Percent of average CPU utilization across your ECS cluster that will trigger an autoscaling event for your ECS service running your virtual gateway. Defaults to 40.
+ * `proxy_service_fargate_memory_autoscaling_percentage`        Percent of average memory utilization across your ECS cluster that will trigger an autoscaling event for your ECS service running your virtual gateway. Defaults to 40.
  * `enable_ecs_exec`          Can be used to toggle ECS Exec functionality. Set to a value other than "true" to disable this functionality. Please note that this should generally be disabled while running in production for most workloads. Defaults to "true".
+ * `certificate_arn`          If specified will enable HTTPS for client to load balancer communications and will associate the specified certificate with the application load balancer for this architecture. This value, if specified, should be a string of an ARN in AWS Certificate Manager.
+
+# Enabling HTTPS for Client to Load Balancer Communication
+
+If the value for `certificate_arn` is specified to be a string referring to the ARN of a certificate in AWS Certificate Manager this will enable HTTPS on the load balancer.
+
+Incoming requests on port 80 will be automatically redirected to port 443 and port 443 will be accepting HTTPS traffic and the load balancer will be associated with the certificate specified.
+
+The certificate used must be a public certificate. For documentation on how to issue and manage certificates with AWS Certificate Manager see [here](https://docs.aws.amazon.com/acm/latest/userguide/gs.html). For documentation on how to import certificates to AWS Certificate Manager see [here](https://docs.aws.amazon.com/acm/latest/userguide/import-certificate.html).
+
+One of the advantages of issuing a certificate from AWS Certificate Manager is that AWS Certificate Manager provides managed renewal for AWS issued TLS/SSL certificates. For documentation on managed renewal in AWS Certificate Manager see [here](https://docs.aws.amazon.com/acm/latest/userguide/managed-renewal.html).
+
+# How AWS Backup is Used in this Architecture
+
+This architecture comes set up to use [AWS Backup](https://aws.amazon.com/backup/) and has automatic backups set up for both AWS EFSs and the RDS database.
+
+The backup plan used is `daily_weekly_monthly7_year_retention` which will take daily, weekly and monthly backups with 7 year retention.
+
+For documentation on AWS Backup see [here](https://docs.aws.amazon.com/aws-backup/latest/devguide/whatisbackup.html).
+
+# How AppMesh is Used in this Architecture
+
+This architecture comes set up to use [AWS AppMesh](https://aws.amazon.com/app-mesh/) out of the box. This is used to provide certificates to enable TLS communication between the load balancer and ECS tasks that will run the application code.
+
+This architecture creates an AWS Private Certificate Authority which is used to issue the certificates that are used for TLS communication between the load balancer and a gateway proxy service and also for TLS communication between the gateway proxy service and the backend service running OpenEMR.
+
+If used in conjunction with HTTPS set up for traffic from clients to the load balancer this provides TLS/SSL for traffic all the way from an end user to the application code.
+
+# Using XRay
+
+This architecture comes set up to use AWS XRay which can be used to help benchmark and debug applications. For more information on AWS Xray see [here](https://aws.amazon.com/xray/).
+
+An example of what the AWS XRay service map for this architecture looks like can be found here:
+
+![alt text](./docs/XRay.png)
 
 # Using ECS Exec
 
@@ -152,6 +191,18 @@ aws ecs execute-command --cluster $name_of_ecs_cluster \
     --interactive \
     --command "/bin/sh"
 ```
+
+# Notes on HIPAA Compliance in General
+
+If you are an AWS customer who is a HIPAA covered entity you would need to sign a business associate addendum (BAA) before running anything that would be considered in-scope for HIPAA on AWS.
+
+Please note that you would have to sign a separate business associate addendum for _each AWS account_ where you would want to run anything that would be considered in-scope for HIPAA on AWS.
+
+Documentation on HIPAA compliance on AWS in general and how one would sign a BAA can be found [here](https://aws.amazon.com/compliance/hipaa-compliance/).
+
+You can use AWS Artifact in the AWS console to find and agree to the BAA. Documentation on getting started with using AWS Artifact can be found [here](https://aws.amazon.com/artifact/getting-started/).
+
+While this may assist with complying with certain aspects of HIPAA we make no claims that this alone will result in compliance with HIPAA. Please see the general disclaimer at the top of this README for more information.
 
 # Regarding Security
 
