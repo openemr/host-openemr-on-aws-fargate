@@ -469,7 +469,10 @@ class OpenemrEcsStack(Stack):
             self,
             "ProxyFargateTaskDefinition",
             cpu=256,
-            memory_limit_mib=512
+            memory_limit_mib=512,
+            runtime_platform=ecs.RuntimePlatform(
+                cpu_architecture=ecs.CpuArchitecture.ARM64
+            )
         )
 
         # Create envoy proxy container definition
@@ -480,7 +483,7 @@ class OpenemrEcsStack(Stack):
                log_group=self.log_group,
             ),
             environment={
-               'ENVOY_LOG_LEVEL': "debug",
+               'ENVOY_LOG_LEVEL': "info",
                'AWS_REGION': self.region,
                'REGION': self.region,
                'ENABLE_ENVOY_XRAY_TRACING': '1',
@@ -734,7 +737,10 @@ class OpenemrEcsStack(Stack):
             self,
             "OpenEMRFargateTaskDefinition",
             cpu=2048,
-            memory_limit_mib=4096
+            memory_limit_mib=4096,
+            runtime_platform=ecs.RuntimePlatform(
+                cpu_architecture=ecs.CpuArchitecture.ARM64
+            )
         )
 
         # Set egress ports to ignore connections to EFS port (2049), HTTPS for curl (443), MySQL port, and Redis port.
@@ -765,7 +771,9 @@ class OpenemrEcsStack(Stack):
 
         # This script sets up certificates to allow for the usage of ElastiCache and RDS with SSL/TLS.
         command_array = [
-            'curl --cacert /swarm-pieces/ssl/certs/ca-certificates.crt -o /root/certs/mysql/server/mysql-ca \
+            'sed -i "s@phpize@phpize82@g" openemr.sh && \
+            sed -i "s@./configure --enable-redis-igbinary@./configure --with-php-config=/usr/bin/php-config82 --enable-redis-igbinary@g" openemr.sh && \
+            curl --cacert /swarm-pieces/ssl/certs/ca-certificates.crt -o /root/certs/mysql/server/mysql-ca \
             --create-dirs https://www.amazontrust.com/repository/AmazonRootCA1.pem && \
             chown apache /root/certs/mysql/server/mysql-ca && \
             mkdir -p /root/certs/redis && \
@@ -902,7 +910,7 @@ class OpenemrEcsStack(Stack):
             ),
             environment={
                 'APPMESH_RESOURCE_ARN': openemr_node.virtual_node_arn,
-                'ENVOY_LOG_LEVEL': "debug",
+                'ENVOY_LOG_LEVEL': "info",
                 'AWS_REGION': self.region,
                 'REGION': self.region,
                 'ENABLE_ENVOY_XRAY_TRACING': '1',
