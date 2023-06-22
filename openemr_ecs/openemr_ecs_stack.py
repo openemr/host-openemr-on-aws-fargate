@@ -772,6 +772,7 @@ class OpenemrEcsStack(Stack):
         # This script sets up certificates to allow for the usage of ElastiCache and RDS with SSL/TLS.
         command_array = [
             'sed -i "s@phpize@phpize82@g" openemr.sh && \
+            sed -i "s@phpize8282@phpize82@g" openemr.sh && \
             sed -i "s@./configure --enable-redis-igbinary@./configure --with-php-config=/usr/bin/php-config82 --enable-redis-igbinary@g" openemr.sh && \
             curl --cacert /swarm-pieces/ssl/certs/ca-certificates.crt -o /root/certs/mysql/server/mysql-ca \
             --create-dirs https://www.amazontrust.com/repository/AmazonRootCA1.pem && \
