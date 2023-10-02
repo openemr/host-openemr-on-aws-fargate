@@ -141,6 +141,7 @@ There are some additional parameters you can set in `cdk.json` that you can use 
  * `proxy_service_fargate_memory_autoscaling_percentage`        Percent of average memory utilization across your ECS cluster that will trigger an autoscaling event for your ECS service running your virtual gateway. Defaults to 40.
  * `enable_ecs_exec`          Can be used to toggle ECS Exec functionality. Set to a value other than "true" to disable this functionality. Please note that this should generally be disabled while running in production for most workloads. Defaults to "true".
  * `certificate_arn`          If specified will enable HTTPS for client to load balancer communications and will associate the specified certificate with the application load balancer for this architecture. This value, if specified, should be a string of an ARN in AWS Certificate Manager.
+ * `activate_openemr_apis`          Setting this value to `"true"` will enable both the [REST](https://github.com/openemr/openemr/blob/master/API_README.md) and [FHIR](https://github.com/openemr/openemr/blob/master/FHIR_README.md) APIs. You'll need to authorize and generate a token to use most of the functionality of both APIs. Documentation on how authorization works can be found [here](https://github.com/openemr/openemr/blob/master/API_README.md#authorization). When the OpenEMR APIs are activated the `"/apis/"` and `"/oauth2"` paths will be accessible. To disable the REST and FHIR APIs for OpenEMR set this value to something other than "true". For more information about this functionality see the `REST and FHIR APIs` section of this documention.
 
 # Enabling HTTPS for Client to Load Balancer Communication
 
@@ -203,6 +204,20 @@ Documentation on HIPAA compliance on AWS in general and how one would sign a BAA
 You can use AWS Artifact in the AWS console to find and agree to the BAA. Documentation on getting started with using AWS Artifact can be found [here](https://aws.amazon.com/artifact/getting-started/).
 
 While this may assist with complying with certain aspects of HIPAA we make no claims that this alone will result in compliance with HIPAA. Please see the general disclaimer at the top of this README for more information.
+
+# REST and FHIR APIs
+
+OpenEMR has functionality for both [FHIR](https://github.com/openemr/openemr/blob/master/FHIR_README.md) and [REST](https://github.com/openemr/openemr/blob/master/API_README.md) APIs. You can toggle both of these APIs on or off for this architecture by changing the value for `activate_openemr_apis` in the cdk.json. Setting this value to `"true"` will enable both the REST and FHIR APIs. 
+
+You'll need to authorize and generate a token to use most of the functionality of both APIs. Documentation on how authorization works can be found [here](https://github.com/openemr/openemr/blob/master/API_README.md#authorization). 
+
+When the OpenEMR APIs are activated the `"/apis/"` and `"/oauth2"` paths will be accessible.
+
+An example call you can make to test the FHIR API that you don't need to authenticate for is a call to the metadata endpoint. An example of that call can be found below:
+
+`curl -X GET '<url_for_your_alb_or_a_dns_record_pointing_to_your_alb>/apis/default/fhir/metadata`
+
+If that call goes well you should get back a decently sized JSON in response.
 
 # Regarding Security
 

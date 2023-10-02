@@ -184,6 +184,26 @@ class OpenemrEcsStack(Stack):
                     ec2.Port.tcp(80),
                 )
 
+        if self.node.try_get_context("activate_openemr_apis") == "true":
+            self.activate_fhir_service = ssm.StringParameter(
+                scope=self,
+                id="activate-fhir-service",
+                parameter_name="activate_fhir_service",
+                string_value="1"
+            )
+            self.activate_rest_api = ssm.StringParameter(
+                scope=self,
+                id="activate-rest-api",
+                parameter_name="activate_rest_api",
+                string_value="1"
+            )
+            self.site_addr_oath = ssm.StringParameter(
+                scope=self,
+                id="site-addr-oath",
+                parameter_name="site_addr_oath",
+                string_value='https://localhost:' + str(self.container_port)
+            )
+
     def _create_alb(self):
         self.alb = elb.ApplicationLoadBalancer(
             self,
@@ -798,6 +818,10 @@ class OpenemrEcsStack(Stack):
             "REDIS_TLS": ecs.Secret.from_ssm_parameter(self.php_redis_tls_variable),
             "SWARM_MODE": ecs.Secret.from_ssm_parameter(self.swarm_mode),
         }
+        if self.node.try_get_context("activate_openemr_apis") == "true":
+            secrets["OPENEMR_SETTING_rest_api"] = ecs.Secret.from_ssm_parameter(self.activate_rest_api)
+            secrets["OPENEMR_SETTING_rest_fhir_api"] = ecs.Secret.from_ssm_parameter(self.activate_fhir_service)
+            secrets["OPENEMR_SETTING_site_addr_oath"] = ecs.Secret.from_ssm_parameter(self.site_addr_oath)
 
         # Add OpenEMR container definition to original task
         openemr_container = openemr_fargate_task_definition.add_container("OpenEMRContainer",
