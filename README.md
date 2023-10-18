@@ -72,6 +72,13 @@ Once the virtualenv is activated, you can install the required dependencies.
 $ pip install -r requirements.txt
 ```
 
+Create ECS Service accounts.
+
+```
+$ aws iam create-service-linked-role --aws-service-name ecs.amazonaws.com --description "ECS Service Role"
+$ aws iam create-service-linked-role --aws-service-name ecs.application-autoscaling.amazonaws.com --description "ECS Service Role for Application Autoscaling"
+```
+
 At this point you can now synthesize the CloudFormation template for this code.
 
 ```
