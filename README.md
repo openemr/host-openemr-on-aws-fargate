@@ -226,6 +226,34 @@ An example call you can make to test the FHIR API that you don't need to authent
 
 If that call goes well you should get back a decently sized JSON in response.
 
+If you'd like to register an API client an example call that will work can be found below:
+
+```
+curl -v -X POST -k -H 'Content-Type: application/json' -i <url_for_your_alb_or_a_dns_record_pointing_to_your_alb>/oauth2/default/registration --data '{
+   "application_type": "private",
+   "redirect_uris":
+     ["<url_for_your_alb_or_a_dns_record_pointing_to_your_alb>/openemr"],
+   "post_logout_redirect_uris":
+     ["<url_for_your_alb_or_a_dns_record_pointing_to_your_alb>/openemr"],
+   "client_name": "A Private App",
+   "token_endpoint_auth_method": "client_secret_post",
+   "contacts": ["me@example.org", "them@example.org"],
+   "scope": "openid offline_access api:oemr api:fhir api:port user/allergy.read user/allergy.write user/appointment.read user/appointment.write user/dental_issue.read user/dental_issue.write user/document.read user/document.write user/drug.read user/encounter.read user/encounter.write user/facility.read user/facility.write user/immunization.read user/insurance.read user/insurance.write user/insurance_company.read user/insurance_company.write user/insurance_type.read user/list.read user/medical_problem.read user/medical_problem.write user/medication.read user/medication.write user/message.write user/patient.read user/patient.write user/practitioner.read user/practitioner.write user/prescription.read user/procedure.read user/soap_note.read user/soap_note.write user/surgery.read user/surgery.write user/transaction.read user/transaction.write user/vital.read user/vital.write user/AllergyIntolerance.read user/CareTeam.read user/Condition.read user/Coverage.read user/Encounter.read user/Immunization.read user/Location.read user/Medication.read user/MedicationRequest.read user/Observation.read user/Organization.read user/Organization.write user/Patient.read user/Patient.write user/Practitioner.read user/Practitioner.write user/PractitionerRole.read user/Procedure.read patient/AllergyIntolerance.read patient/CareTeam.read patient/Condition.read patient/Coverage.read patient/Encounter.read patient/Immunization.read patient/MedicationRequest.read patient/Observation.read patient/Patient.read patient/Procedure.read"
+  }'
+```
+
+After making the call you should get back a 200 response code and a JSON that looks as follows:
+
+```
+{"client_id":"vafy4lg6i06juUFsvaDP7Pfs5qGPBwU1jtdDMYKDNOo","client_secret":"maa_MfSXRUSdT9Qgghn4UxMDKvnjtcWrMUP35SIcQc7A6GwkaRn-9jy4EpSO6s-4Hr4S3LLmAusdYIPmorWxRw","registration_access_token":"r65hhH-jxIySciJQRMgKLLr7GP_8ne0ghm_0O9PRfQ0","registration_client_uri":"https:\/\/localhost:80\/oauth2\/default\/client\/QVGYa92eaeZtn-NzrX5BqA","client_id_issued_at":1698337618,"client_secret_expires_at":0,"client_role":"user","contacts":["me@example.org","them@example.org"],"application_type":"private","client_name":"A Private App","redirect_uris":["<url_for_your_alb_or_a_dns_record_pointing_to_your_alb>/openemr"],"post_logout_redirect_uris":["<url_for_your_alb_or_a_dns_record_pointing_to_your_alb>/openemr"],"token_endpoint_auth_method":"client_secret_post","scope":"openid offline_access api:oemr api:fhir api:port user\/allergy.read user\/allergy.write user\/appointment.read user\/appointment.write user\/dental_issue.read user\/dental_issue.write user\/document.read user\/document.write user\/drug.read user\/encounter.read user\/encounter.write user\/facility.read user\/facility.write user\/immunization.read user\/insurance.read user\/insurance.write user\/insurance_company.read user\/insurance_company.write user\/insurance_type.read user\/list.read user\/medical_problem.read user\/medical_problem.write user\/medication.read user\/medication.write user\/message.write user\/patient.read user\/patient.write user\/practitioner.read user\/practitioner.write user\/prescription.read user\/procedure.read user\/soap_note.read user\/soap_note.write user\/surgery.read user\/surgery.write user\/transaction.read user\/transaction.write user\/vital.read user\/vital.write user\/AllergyIntolerance.read user\/CareTeam.read user\/Condition.read user\/Coverage.read user\/Encounter.read user\/Immunization.read user\/Location.read user\/Medication.read user\/MedicationRequest.read user\/Observation.read user\/Organization.read user\/Organization.write user\/Patient.read user\/Patient.write user\/Practitioner.read user\/Practitioner.write user\/PractitionerRole.read user\/Procedure.read patient\/AllergyIntolerance.read patient\/CareTeam.read patient\/Condition.read patient\/Coverage.read patient\/Encounter.read patient\/Immunization.read patient\/MedicationRequest.read patient\/Observation.read patient\/Patient.read patient\/Procedure.read"}%
+```
+
+You can then use the Admin user for OpenEMR to navigate to the API Clients page as shown below:
+![alt text](./docs/APIClientsMenu.png)
+
+Use the edit button to enable the API Client that corresponds to the "client_id" you received from your previous API call. The end result should look like the picture below and you are now able to make authenticated FHIR and REST API calls to OpenEMR:
+![alt text](./docs/RegisterAPIClient.png)
+
 # Regarding Security
 
 ### Using cdk_nag
