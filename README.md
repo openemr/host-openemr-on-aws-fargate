@@ -214,45 +214,21 @@ While this may assist with complying with certain aspects of HIPAA we make no cl
 
 # REST and FHIR APIs
 
-OpenEMR has functionality for both [FHIR](https://github.com/openemr/openemr/blob/master/FHIR_README.md) and [REST](https://github.com/openemr/openemr/blob/master/API_README.md) APIs. You can toggle both of these APIs on or off for this architecture by changing the value for `activate_openemr_apis` in the cdk.json. Setting this value to `"true"` will enable both the REST and FHIR APIs. 
+OpenEMR has functionality for both [FHIR](https://github.com/openemr/openemr/blob/master/FHIR_README.md) and [REST](https://github.com/openemr/openemr/blob/master/API_README.md) APIs. We'll walk through step-by-step example of how to generate a token to make calls to the FHIR and REST APIs. The script we'll use for this walkthough is the "api_endpoint_test.py" file found in the "scripts" folder in this repository.
 
-You'll need to authorize and generate a token to use most of the functionality of both APIs. Documentation on how authorization works can be found [here](https://github.com/openemr/openemr/blob/master/API_README.md#authorization). 
+To use the APIs you'll need to have HTTPS enabled for the communication from the client to the load balancer and to have the OpenEMR APIs turned on. As a result, before proceeding with the rest of this walkthrough make sure that in your `cdk.json` file you've specified an ACM certificate ARN for `certificate_arn` and that `activate_openemr_apis` is set to `"true"`.
 
-When the OpenEMR APIs are activated the `"/apis/"` and `"/oauth2"` paths will be accessible.
+1. Wait for the `cdk deploy` command to finish and for the stack to build. Then obtain the value for the DNS name of our ALB from either the Cloudformation console <br /> ![alt text](./docs/ConsoleOutputALBDNS.png) <br /> or the terminal you ran `cdk deploy` in <br /> ![alt text](./docs/TerminalOutputALBDNS.png)
+2. Change directory to the `"scripts"` folder in this repository and run the "api_endpoint_test.py" script using the value obtained in part 1. That should look something like this <br /> ![alt text](./docs/RunningPythonScript.png) <br /> and yield an output that looks like this <br /> ![alt text](./docs/1stOutputFromScript.png) <br /> at the bottom of the output you should see a message instructing you to "Enable the client with the above ID". 
+3. To "Enable the client with the above ID" first copy the value in green below <br /> ![alt text](./docs/OutputFromScriptClientID.png) <br /> then log in to OpenEMR and navigate to the API Clients menu as shown below <br /> ![alt text](./docs/APIClientsMenu.png) <br /> then in the menu find the registration where the Client ID corresponds with the value noted above <br /> ![alt text](./docs/FindingCorrectClientID.png) <br /> and then click on the "edit" button next to that registration and in the following menu click the "Enable Client" button <br /> ![alt text](./docs/EnableClientButton.png) <br /> and if all goes well the client registration should now reflect that it is enabled like so <br /> ![alt text](./docs/ClientEnabled.png).
+4. Now that we've enabled our client let's go back to our script that's still running in our terminal and press enter to continue. We should get an output like this <br /> ![alt text](./docs/2ndOutputFromScript.png) <br /> and our script has generated a URL we should go to to authorize our application. 
+5. Before we navigate to that URL let's make a patient (in the event we didn't already have testing patient data imported) by going to the following menu <br /> ![alt text](./docs/AddNewPatient.png) <br /> and adding a fake patient for testing purposes with data and clicking the `"Create New Patient"` button like so <br /> ![alt text](./docs/CreateNewPatient.png)
+6. Now let's navigate to the URL obtained in part 4 in our webbrowser where we should be prompted to login and should look like this <br /> ![alt text](./docs/LoginPrompt.png). <br /> Log in with the admin user and password stored in secrets manager. 
+7. Keep in mind that the next three steps are time sensitive. We're going to obtain a code in steps 8 and 9 that is short lived and needs to be used relatively quickly to get back an access token which can then be used to make API calls over an extended period of time. I'd recommend reading ahead for steps 8-10 so that you can step through them reasonably fast.
+8. Then let's select our testing user <br /> ![alt text](./docs/SelectPatient.png) <br /> which should bring us to a screen that looks like this <br /> ![alt text](./docs/TopOfAuthorizationPage.png) <br /> and then scroll to the bottom of the page and click `"authorize"` <br /> ![alt text](./docs/ClickAuthorize.png)
+9. Now in our example you're going to get a `"403 Forbidden"` page. That's totally fine! Notice the URL we were redirected to and copy everything after `?code=` up until `&state=` to your clipboard <br /> ![alt text](./docs/403Forbidden.png) <br /> At this stage in the process you've registered an API client, enabled it in the console, authorized and gotten a code which we've copied to our clipboard.
+10. Let's navigate back to our script that's running in the terminal and press enter to proceed. The next prompt should be instructing us to "Copy the code in the redirect link and then press enter." which if all went well in part 8 should already be done. Now let's press enter to proceed. We should see the code we copied appear in the terminal like so <br /> ![alt text](./docs/CodeInTerminal.png) <br /> followed by a response containing an access token that can be used to make authenticatecd API calls that looks like this <br /> ![alt text](./docs/Success.png)
 
-An example call you can make to test the FHIR API that you don't need to authenticate for is a call to the metadata endpoint. An example of that call can be found below:
-
-`curl -X GET '<url_for_your_alb_or_a_dns_record_pointing_to_your_alb>/apis/default/fhir/metadata`
-
-If that call goes well you should get back a decently sized JSON in response.
-
-If you'd like to register an API client an example call that will work can be found below:
-
-```
-curl -v -X POST -k -H 'Content-Type: application/json' -i <url_for_your_alb_or_a_dns_record_pointing_to_your_alb>/oauth2/default/registration --data '{
-   "application_type": "private",
-   "redirect_uris":
-     ["<url_for_your_alb_or_a_dns_record_pointing_to_your_alb>/openemr"],
-   "post_logout_redirect_uris":
-     ["<url_for_your_alb_or_a_dns_record_pointing_to_your_alb>/openemr"],
-   "client_name": "A Private App",
-   "token_endpoint_auth_method": "client_secret_post",
-   "contacts": ["me@example.org", "them@example.org"],
-   "scope": "openid offline_access api:oemr api:fhir api:port user/allergy.read user/allergy.write user/appointment.read user/appointment.write user/dental_issue.read user/dental_issue.write user/document.read user/document.write user/drug.read user/encounter.read user/encounter.write user/facility.read user/facility.write user/immunization.read user/insurance.read user/insurance.write user/insurance_company.read user/insurance_company.write user/insurance_type.read user/list.read user/medical_problem.read user/medical_problem.write user/medication.read user/medication.write user/message.write user/patient.read user/patient.write user/practitioner.read user/practitioner.write user/prescription.read user/procedure.read user/soap_note.read user/soap_note.write user/surgery.read user/surgery.write user/transaction.read user/transaction.write user/vital.read user/vital.write user/AllergyIntolerance.read user/CareTeam.read user/Condition.read user/Coverage.read user/Encounter.read user/Immunization.read user/Location.read user/Medication.read user/MedicationRequest.read user/Observation.read user/Organization.read user/Organization.write user/Patient.read user/Patient.write user/Practitioner.read user/Practitioner.write user/PractitionerRole.read user/Procedure.read patient/AllergyIntolerance.read patient/CareTeam.read patient/Condition.read patient/Coverage.read patient/Encounter.read patient/Immunization.read patient/MedicationRequest.read patient/Observation.read patient/Patient.read patient/Procedure.read"
-  }'
-```
-
-After making the call you should get back a 200 response code and a JSON that looks as follows:
-
-```
-{"client_id":"vafy4lg6i06juUFsvaDP7Pfs5qGPBwU1jtdDMYKDNOo","client_secret":"maa_MfSXRUSdT9Qgghn4UxMDKvnjtcWrMUP35SIcQc7A6GwkaRn-9jy4EpSO6s-4Hr4S3LLmAusdYIPmorWxRw","registration_access_token":"r65hhH-jxIySciJQRMgKLLr7GP_8ne0ghm_0O9PRfQ0","registration_client_uri":"https:\/\/localhost:80\/oauth2\/default\/client\/QVGYa92eaeZtn-NzrX5BqA","client_id_issued_at":1698337618,"client_secret_expires_at":0,"client_role":"user","contacts":["me@example.org","them@example.org"],"application_type":"private","client_name":"A Private App","redirect_uris":["<url_for_your_alb_or_a_dns_record_pointing_to_your_alb>/openemr"],"post_logout_redirect_uris":["<url_for_your_alb_or_a_dns_record_pointing_to_your_alb>/openemr"],"token_endpoint_auth_method":"client_secret_post","scope":"openid offline_access api:oemr api:fhir api:port user\/allergy.read user\/allergy.write user\/appointment.read user\/appointment.write user\/dental_issue.read user\/dental_issue.write user\/document.read user\/document.write user\/drug.read user\/encounter.read user\/encounter.write user\/facility.read user\/facility.write user\/immunization.read user\/insurance.read user\/insurance.write user\/insurance_company.read user\/insurance_company.write user\/insurance_type.read user\/list.read user\/medical_problem.read user\/medical_problem.write user\/medication.read user\/medication.write user\/message.write user\/patient.read user\/patient.write user\/practitioner.read user\/practitioner.write user\/prescription.read user\/procedure.read user\/soap_note.read user\/soap_note.write user\/surgery.read user\/surgery.write user\/transaction.read user\/transaction.write user\/vital.read user\/vital.write user\/AllergyIntolerance.read user\/CareTeam.read user\/Condition.read user\/Coverage.read user\/Encounter.read user\/Immunization.read user\/Location.read user\/Medication.read user\/MedicationRequest.read user\/Observation.read user\/Organization.read user\/Organization.write user\/Patient.read user\/Patient.write user\/Practitioner.read user\/Practitioner.write user\/PractitionerRole.read user\/Procedure.read patient\/AllergyIntolerance.read patient\/CareTeam.read patient\/Condition.read patient\/Coverage.read patient\/Encounter.read patient\/Immunization.read patient\/MedicationRequest.read patient\/Observation.read patient\/Patient.read patient\/Procedure.read"}%
-```
-
-You can then use the Admin user for OpenEMR to navigate to the API Clients page as shown below:
-![alt text](./docs/APIClientsMenu.png)
-
-Use the edit button to enable the API Client that corresponds to the "client_id" you received from your previous API call. The end result should look like the picture below and you are now able to make authenticated FHIR and REST API calls to OpenEMR:
-![alt text](./docs/RegisterAPIClient.png)
 
 # Regarding Security
 
