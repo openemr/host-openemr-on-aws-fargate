@@ -184,6 +184,17 @@ class OpenemrEcsStack(Stack):
                     ec2.Port.tcp(80),
                 )
 
+    def _create_alb(self):
+        self.alb = elb.ApplicationLoadBalancer(
+            self,
+            "Load-Balancer",
+            security_group=self.lb_sec_group,
+            vpc=self.vpc,
+            internet_facing=True,
+            drop_invalid_header_fields=True
+        )
+        self.alb.log_access_logs(self.elb_log_bucket)
+
         if self.node.try_get_context("activate_openemr_apis") == "true":
             self.activate_fhir_service = ssm.StringParameter(
                 scope=self,
@@ -197,23 +208,20 @@ class OpenemrEcsStack(Stack):
                 parameter_name="activate_rest_api",
                 string_value="1"
             )
-            self.site_addr_oath = ssm.StringParameter(
-                scope=self,
-                id="site-addr-oath",
-                parameter_name="site_addr_oath",
-                string_value='https://localhost:' + str(self.container_port)
-            )
-
-    def _create_alb(self):
-        self.alb = elb.ApplicationLoadBalancer(
-            self,
-            "Load-Balancer",
-            security_group=self.lb_sec_group,
-            vpc=self.vpc,
-            internet_facing=True,
-            drop_invalid_header_fields=True
-        )
-        self.alb.log_access_logs(self.elb_log_bucket)
+            if self.node.try_get_context("certificate_arn"):
+                self.site_addr_oath = ssm.StringParameter(
+                    scope=self,
+                    id="site-addr-oath",
+                    parameter_name="site_addr_oath",
+                    string_value='https://' + self.alb.load_balancer_dns_name
+                )
+            else:
+                self.site_addr_oath = ssm.StringParameter(
+                    scope=self,
+                    id="site-addr-oath",
+                    parameter_name="site_addr_oath",
+                    string_value='http://' + self.alb.load_balancer_dns_name
+                )
 
     def _create_db_instance(self):
         db_secret = secretsmanager.Secret(
