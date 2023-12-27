@@ -137,7 +137,6 @@ This solution uses a variety of AWS services including [Amazon ECS](https://aws.
 
 There are some additional parameters you can set in `cdk.json` that you can use to customize some attributes of your architecture.
 
- * `elasticache_cache_node_type`          The cache node type used by Elasticache. Defaults to "cache.t3.small".
  * `openemr_service_fargate_minimum_capacity`       Minimum number of fargate tasks running in your ECS cluster for your ECS service running OpenEMR. Defaults to 3.
  * `openemr_service_fargate_maximum_capacity`      Maximum number of fargate tasks running in your ECS cluster for your ECS service running OpenEMR. Defaults to 100.
  * `openemr_service_fargate_cpu_autoscaling_percentage`        Percent of average CPU utilization across your ECS cluster that will trigger an autoscaling event for your ECS service running OpenEMR. Defaults to 40.

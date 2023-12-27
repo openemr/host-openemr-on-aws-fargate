@@ -16,7 +16,6 @@
   },
   "context": {
     "security_group_ip_range": null,
-    "elasticache_cache_node_type": "cache.t3.small",
     "openemr_service_fargate_minimum_capacity": 3,
     "openemr_service_fargate_maximum_capacity": 100,
     "openemr_service_fargate_cpu_autoscaling_percentage": 40,

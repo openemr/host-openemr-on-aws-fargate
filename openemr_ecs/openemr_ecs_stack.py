@@ -257,53 +257,20 @@ class OpenemrEcsStack(Stack):
     def _create_redis_cluster(self):
         private_subnets_ids = [ps.subnet_id for ps in self.vpc.private_subnets]
 
-        redis_subnet_group = elasticache.CfnSubnetGroup(
-            scope=self,
-            id="redis_subnet_group",
-            subnet_ids=private_subnets_ids,
-            description="subnet group for redis"
-        )
-
-        self.redis_secret = secretsmanager.Secret(
-            scope=self,
-            id="redis_secret",
-            generate_secret_string=secretsmanager.SecretStringGenerator(
-                exclude_punctuation=True,
-                include_space=False,
-                secret_string_template='{"username": "dbadmin"}',
-                generate_string_key="password"
-            )
-        )
-
-        self.redis_cluster = elasticache.CfnReplicationGroup(
+        self.redis_cluster = elasticache.CfnServerlessCache(
             scope=self,
             id="RedisCluster",
-            replication_group_description='Elasticache Redis Replication Group',
-            auth_token=self.redis_secret.secret_value_from_json('password').unsafe_unwrap(),
-            num_cache_clusters=2,
-            at_rest_encryption_enabled=True,
-            automatic_failover_enabled=True,
-            transit_encryption_enabled=True,
-            multi_az_enabled=True,
             engine="redis",
-            cache_node_type=self.node.try_get_context("elasticache_cache_node_type"),
-            cache_subnet_group_name=redis_subnet_group.ref,
+            serverless_cache_name="openemrredis",
+            subnet_ids=private_subnets_ids,
             security_group_ids=[self.redis_sec_group.security_group_id]
         )
-        self.redis_cluster.add_override("Properties.ClusterMode", "Disabled")
 
         self.redis_endpoint = ssm.StringParameter(
             self,
             "redis-endpoint",
             parameter_name="redis_endpoint",
-            string_value=self.redis_cluster.attr_primary_end_point_address
-        )
-
-        self.php_redis_build_variable = ssm.StringParameter(
-            scope=self,
-            id="php-redis-build-variable",
-            parameter_name="php_redis_build_variable",
-            string_value="develop"
+            string_value=self.redis_cluster.attr_endpoint_address
         )
 
         self.php_redis_tls_variable = ssm.StringParameter(
@@ -819,10 +786,7 @@ class OpenemrEcsStack(Stack):
             "MYSQL_PORT": ecs.Secret.from_ssm_parameter(self.mysql_port_var),
             "OE_USER": ecs.Secret.from_secrets_manager(self.password, "username"),
             "OE_PASS": ecs.Secret.from_secrets_manager(self.password, "password"),
-            "REDIS_PASSWORD": ecs.Secret.from_secrets_manager(self.redis_secret, "password"),
-            "REDISCLI_AUTH": ecs.Secret.from_secrets_manager(self.redis_secret, "password"),
             "REDIS_SERVER": ecs.Secret.from_ssm_parameter(self.redis_endpoint),
-            "PHPREDIS_BUILD": ecs.Secret.from_ssm_parameter(self.php_redis_build_variable),
             "REDIS_TLS": ecs.Secret.from_ssm_parameter(self.php_redis_tls_variable),
             "SWARM_MODE": ecs.Secret.from_ssm_parameter(self.swarm_mode),
         }
