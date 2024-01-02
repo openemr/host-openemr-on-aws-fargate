@@ -1,5 +1,27 @@
 # OpenEMR on AWS Fargate
 
+- [OpenEMR on AWS Fargate](#openemr-on-aws-fargate)
+- [Disclaimers](#disclaimers)
+    + [Third Party Packages](#third-party-packages)
+    + [General](#general)
+- [Instructions](#instructions)
+    + [1. Installing dependencies](#1-installing-dependencies)
+    + [2. IP Range Access](#2-ip-range-access)
+    + [3. Accessing OpenEMR](#3-accessing-openemr)
+- [Architecture](#architecture)
+- [Customizing Architecture Attributes](#customizing-architecture-attributes)
+- [Enabling HTTPS for Client to Load Balancer Communication](#enabling-https-for-client-to-load-balancer-communication)
+- [How AWS Backup is Used in this Architecture](#how-aws-backup-is-used-in-this-architecture)
+- [How AppMesh is Used in this Architecture](#how-appmesh-is-used-in-this-architecture)
+- [Using XRay](#using-xray)
+- [Using ECS Exec](#using-ecs-exec)
+- [Notes on HIPAA Compliance in General](#notes-on-hipaa-compliance-in-general)
+- [REST and FHIR APIs](#rest-and-fhir-apis)
+- [Regarding Security](#regarding-security)
+    + [Using cdk_nag](#using-cdk-nag)
+    + [Container Vulnerabilities](#container-vulnerabilities)
+  * [Useful commands](#useful-commands)
+
 # Disclaimers
 
 ### Third Party Packages
@@ -37,6 +59,8 @@ AND DISCLAIMERS APPLY EXCEPT TO THE EXTENT PROHIBITED BY APPLICABLE LAW.
 AWS does not represent or warrant that this AWS Content is production ready.  You are responsible for making your own independent assessment of the information, guidance, code and other AWS Content provided by AWS, which may include you performing your own independent testing, securing, and optimizing. You should take independent measures to ensure that you comply with your own specific quality control practices and standards, and to ensure that you comply with the local rules, laws, regulations, licenses and terms that apply to you and your content.  If you are in a regulated industry, you should take extra care to ensure that your use of this AWS Content, in combination with your own content, complies with applicable regulations (for example, the Health Insurance Portability and Accountability Act of 1996).   AWS does not make any representations, warranties or guarantees that this AWS Content will result in a particular outcome or result. 
 
 # Instructions
+
+These setup instructions assume that you've setup an AWS account and configured the AWS CDK. If you haven't done that we'd advise looking at [this documentation for setting up an AWS account](https://docs.aws.amazon.com/SetUp/latest/UserGuide/setup-overview.html) and [this documentation for setting up the AWS CDK](https://docs.aws.amazon.com/cdk/v2/guide/getting_started.html) before reviewing the instructions below. 
 
 ### 1. Installing dependencies
 
