@@ -166,13 +166,14 @@ You'll pay for the AWS resources you use with this architecture but since that w
 - Aurora Serverless v1 ($0.12/hour base cost)
 - AWS Fargate ($0.266625/hour base cost)
 - 1 Application Load Balancer($0.0225/hour base cost)
+- 3 NAT Gateways ($0.135/hour base cost)
 - 2 Secrets Manager Secrets ($0.80/month)
 - 1 Private R53 Hosted Zone ($0.50/month)
 - 1 Private Certificate Authority ($400/month)
 - 2 Certificates issued from Private Certificate Authority ($1.50/month)
 - 1 WAF ACL ($5/month)
 
-This works out to a base cost of $797.71/month. The true value of this architecture is its ability to rapidly autoscale and support even very large organizations. For smaller organizations you may want to consider looking at some of [OpenEMR's offerings in the AWS Marketplace](https://aws.amazon.com/marketplace/seller-profile?id=bec33905-edcb-4c30-b3ae-e2960a9a5ef4) which are more affordable.
+This works out to a base cost of $896.26/month. The true value of this architecture is its ability to rapidly autoscale and support even very large organizations. For smaller organizations you may want to consider looking at some of [OpenEMR's offerings in the AWS Marketplace](https://aws.amazon.com/marketplace/seller-profile?id=bec33905-edcb-4c30-b3ae-e2960a9a5ef4) which are more affordable.
 
 # Customizing Architecture Attributes
 
