@@ -9,6 +9,7 @@
     + [2. IP Range Access](#2-ip-range-access)
     + [3. Accessing OpenEMR](#3-accessing-openemr)
 - [Architecture](#architecture)
+- [Cost](#cost)
 - [Customizing Architecture Attributes](#customizing-architecture-attributes)
 - [Enabling HTTPS for Client to Load Balancer Communication](#enabling-https-for-client-to-load-balancer-communication)
 - [How AWS Backup is Used in this Architecture](#how-aws-backup-is-used-in-this-architecture)
@@ -156,6 +157,22 @@ After entering username and password we should be able to get access to the Open
 This solution uses a variety of AWS services including [Amazon ECS](https://aws.amazon.com/ecs/), [AWS Fargate](https://aws.amazon.com/fargate/), [AWS WAF](https://aws.amazon.com/waf/), [Amazon CloudWatch](https://aws.amazon.com/cloudwatch/). For a full list you can review the cdk stack. Architecture diagram below shows how this solution comes together.
 
 ![alt text](./docs/Architecture.png)
+
+# Cost
+
+You'll pay for the AWS resources you use with this architecture but since that will depend on your level of usage we'll compute an estimate of the base cost of this architecture (this will vary from region to region).
+
+- Elasticache Serverless ($0.125/hour base cost)
+- Aurora Serverless v1 ($0.12/hour base cost)
+- AWS Fargate ($0.266625/hour base cost)
+- 1 Application Load Balancer($0.0225/hour base cost)
+- 2 Secrets Manager Secrets ($0.80/month)
+- 1 Private R53 Hosted Zone ($0.50/month)
+- 1 Private Certificate Authority ($400/month)
+- 2 Certificates issued from Private Certificate Authority ($1.50/month)
+- 1 WAF ACL ($5/month)
+
+This works out to a base cost of $797.71/month. The true value of this architecture is its ability to rapidly autoscale and support even very large organizations. For smaller organizations you may want to consider looking at some of [OpenEMR's offerings in the AWS Marketplace](https://aws.amazon.com/marketplace/seller-profile?id=bec33905-edcb-4c30-b3ae-e2960a9a5ef4) which are more affordable.
 
 # Customizing Architecture Attributes
 
