@@ -236,7 +236,17 @@ class OpenemrEcsStack(Stack):
         )
 
         db_credentials = rds.Credentials.from_secret(db_secret)
+        parameter_group = rds.ParameterGroup(
+            self,
+            "ParameterGroup",
+            engine=rds.DatabaseClusterEngine.AURORA_MYSQL,
+            parameters={
+                "server_audit_logs_upload":"1",
+                "general_log":"1",
+                "slow_query_log":"1"
 
+            }
+        )
         self.db_instance = rds.ServerlessCluster(
             self,
             "DatabaseCluster",
@@ -247,12 +257,15 @@ class OpenemrEcsStack(Stack):
                 subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
             ),
             credentials=db_credentials,
+            parameter_group=parameter_group,
             scaling=rds.ServerlessScalingOptions(
                 auto_pause=Duration.minutes(0),
                 min_capacity=rds.AuroraCapacityUnit.ACU_1,
                 max_capacity=rds.AuroraCapacityUnit.ACU_256
             )
         )
+        cfn_db_instance = self.db_instance.node.default_child
+        cfn_db_instance.cloudwatch_logs_exports = ["audit","error","general","slowquery"]
 
     def _create_redis_cluster(self):
         private_subnets_ids = [ps.subnet_id for ps in self.vpc.private_subnets]
