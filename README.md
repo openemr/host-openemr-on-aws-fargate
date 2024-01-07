@@ -13,15 +13,13 @@
 - [Customizing Architecture Attributes](#customizing-architecture-attributes)
 - [Enabling HTTPS for Client to Load Balancer Communication](#enabling-https-for-client-to-load-balancer-communication)
 - [How AWS Backup is Used in this Architecture](#how-aws-backup-is-used-in-this-architecture)
-- [How AppMesh is Used in this Architecture](#how-appmesh-is-used-in-this-architecture)
-- [Using XRay](#using-xray)
 - [Using ECS Exec](#using-ecs-exec)
 - [Notes on HIPAA Compliance in General](#notes-on-hipaa-compliance-in-general)
 - [REST and FHIR APIs](#rest-and-fhir-apis)
 - [Regarding Security](#regarding-security)
     + [Using cdk_nag](#using-cdk-nag)
     + [Container Vulnerabilities](#container-vulnerabilities)
-  * [Useful commands](#useful-commands)
+- [Useful commands](#useful-commands)
 
 # Disclaimers
 
@@ -164,29 +162,22 @@ You'll pay for the AWS resources you use with this architecture but since that w
 
 - Elasticache Serverless ($0.125/hour base cost)
 - Aurora Serverless v1 ($0.12/hour base cost)
-- AWS Fargate ($0.266625/hour base cost)
+- AWS Fargate ($0.08612/hour base cost)
 - 1 Application Load Balancer($0.0225/hour base cost)
-- 3 NAT Gateways ($0.135/hour base cost)
+- 2 NAT Gateways ($0.09/hour base cost)
 - 2 Secrets Manager Secrets ($0.80/month)
-- 1 Private R53 Hosted Zone ($0.50/month)
-- 1 Private Certificate Authority ($400/month)
-- 2 Certificates issued from Private Certificate Authority ($1.50/month)
 - 1 WAF ACL ($5/month)
 
-This works out to a base cost of $896.26/month. The true value of this architecture is its ability to rapidly autoscale and support even very large organizations. For smaller organizations you may want to consider looking at some of [OpenEMR's offerings in the AWS Marketplace](https://aws.amazon.com/marketplace/seller-profile?id=bec33905-edcb-4c30-b3ae-e2960a9a5ef4) which are more affordable.
+This works out to a base cost of $329.64/month. The true value of this architecture is its ability to rapidly autoscale and support even very large organizations. For smaller organizations you may want to consider looking at some of [OpenEMR's offerings in the AWS Marketplace](https://aws.amazon.com/marketplace/seller-profile?id=bec33905-edcb-4c30-b3ae-e2960a9a5ef4) which are more affordable.
 
 # Customizing Architecture Attributes
 
 There are some additional parameters you can set in `cdk.json` that you can use to customize some attributes of your architecture.
 
- * `openemr_service_fargate_minimum_capacity`       Minimum number of fargate tasks running in your ECS cluster for your ECS service running OpenEMR. Defaults to 3.
+ * `openemr_service_fargate_minimum_capacity`       Minimum number of fargate tasks running in your ECS cluster for your ECS service running OpenEMR. Defaults to 2.
  * `openemr_service_fargate_maximum_capacity`      Maximum number of fargate tasks running in your ECS cluster for your ECS service running OpenEMR. Defaults to 100.
  * `openemr_service_fargate_cpu_autoscaling_percentage`        Percent of average CPU utilization across your ECS cluster that will trigger an autoscaling event for your ECS service running OpenEMR. Defaults to 40.
  * `openemr_service_fargate_memory_autoscaling_percentage`        Percent of average memory utilization across your ECS cluster that will trigger an autoscaling event for your ECS service running OpenEMR. Defaults to 40.
- * `proxy_service_fargate_minimum_capacity`       Minimum number of fargate tasks running in your ECS cluster for your ECS service running your virtual gateway. Defaults to 3.
- * `proxy_service_fargate_maximum_capacity`      Maximum number of fargate tasks running in your ECS cluster for your ECS service running your virtual gateway. Defaults to 100.
- * `proxy_service_fargate_cpu_autoscaling_percentage`        Percent of average CPU utilization across your ECS cluster that will trigger an autoscaling event for your ECS service running your virtual gateway. Defaults to 40.
- * `proxy_service_fargate_memory_autoscaling_percentage`        Percent of average memory utilization across your ECS cluster that will trigger an autoscaling event for your ECS service running your virtual gateway. Defaults to 40.
  * `enable_ecs_exec`          Can be used to toggle ECS Exec functionality. Set to a value other than "true" to disable this functionality. Please note that this should generally be disabled while running in production for most workloads. Defaults to "true".
  * `certificate_arn`          If specified will enable HTTPS for client to load balancer communications and will associate the specified certificate with the application load balancer for this architecture. This value, if specified, should be a string of an ARN in AWS Certificate Manager.
  * `activate_openemr_apis`          Setting this value to `"true"` will enable both the [REST](https://github.com/openemr/openemr/blob/master/API_README.md) and [FHIR](https://github.com/openemr/openemr/blob/master/FHIR_README.md) APIs. You'll need to authorize and generate a token to use most of the functionality of both APIs. Documentation on how authorization works can be found [here](https://github.com/openemr/openemr/blob/master/API_README.md#authorization). When the OpenEMR APIs are activated the `"/apis/"` and `"/oauth2"` paths will be accessible. To disable the REST and FHIR APIs for OpenEMR set this value to something other than "true". For more information about this functionality see the `REST and FHIR APIs` section of this documention. Defaults to "false".
@@ -208,22 +199,6 @@ This architecture comes set up to use [AWS Backup](https://aws.amazon.com/backup
 The backup plan used is `daily_weekly_monthly7_year_retention` which will take daily, weekly and monthly backups with 7 year retention.
 
 For documentation on AWS Backup see [here](https://docs.aws.amazon.com/aws-backup/latest/devguide/whatisbackup.html).
-
-# How AppMesh is Used in this Architecture
-
-This architecture comes set up to use [AWS AppMesh](https://aws.amazon.com/app-mesh/) out of the box. This is used to provide certificates to enable TLS communication between the load balancer and ECS tasks that will run the application code.
-
-This architecture creates an AWS Private Certificate Authority which is used to issue the certificates that are used for TLS communication between the load balancer and a gateway proxy service and also for TLS communication between the gateway proxy service and the backend service running OpenEMR.
-
-If used in conjunction with HTTPS set up for traffic from clients to the load balancer this provides TLS/SSL for traffic all the way from an end user to the application code.
-
-# Using XRay
-
-This architecture comes set up to use AWS XRay which can be used to help benchmark and debug applications. For more information on AWS Xray see [here](https://aws.amazon.com/xray/).
-
-An example of what the AWS XRay service map for this architecture looks like can be found here:
-
-![alt text](./docs/XRay.png)
 
 # Using ECS Exec
 
@@ -270,7 +245,6 @@ To use the APIs you'll need to have HTTPS enabled for the communication from the
 9. Now in our example you're going to get a `"403 Forbidden"` page. That's totally fine! Notice the URL we were redirected to and copy everything after `?code=` up until `&state=` to your clipboard <br /> ![alt text](./docs/403Forbidden.png) <br /> At this stage in the process you've registered an API client, enabled it in the console, authorized and gotten a code which we've copied to our clipboard.
 10. Let's navigate back to our script that's running in the terminal and press enter to proceed. The next prompt should be instructing us to "Copy the code in the redirect link and then press enter." which if all went well in part 8 should already be done. Now let's press enter to proceed. We should see the code we copied appear in the terminal like so <br /> ![alt text](./docs/CodeInTerminal.png) <br /> followed by a response containing an access token that can be used to make authenticatecd API calls that looks like this <br /> ![alt text](./docs/Success.png)
 
-
 # Regarding Security
 
 ### Using cdk_nag
@@ -294,7 +268,7 @@ We recommend periodically scanning the container image used in this project. The
 1. Upload the container image to ECR and enable scanning
 2. You can use [trivy](https://github.com/aquasecurity/trivy)
 
-## Useful commands
+# Useful commands
 
  * `cdk ls`          list all stacks in the app
  * `cdk synth`       emits the synthesized CloudFormation template

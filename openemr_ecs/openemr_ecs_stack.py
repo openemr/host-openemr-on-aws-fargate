@@ -14,11 +14,12 @@ from aws_cdk import (
     aws_s3 as s3,
     aws_ssm as ssm,
     aws_wafv2 as wafv2,
+    aws_lambda as _lambda,
     aws_secretsmanager as secretsmanager,
-    aws_appmesh as appmesh,
-    aws_acmpca as acmpca,
-    aws_servicediscovery as servicediscovery,
     aws_certificatemanager as acm,
+    aws_events as events,
+    aws_events_targets as event_targets,
+    triggers,
     Duration,
     RemovalPolicy,
     ArnFormat
@@ -31,10 +32,10 @@ class OpenemrEcsStack(Stack):
         super().__init__(scope, construct_id, **kwargs)
 
         self.cidr = "10.0.0.0/16"
-        self.private_dns_namespace_name = "openemr.local"
         self.mysql_port = 3306
         self.redis_port = 6379
-        self.container_port = 80
+        self.container_port = 443
+        self.number_of_days_to_regenerate_ssl_materials = 2
         self._create_vpc()
         self._create_security_groups()
         self._create_elb_log_bucket()
@@ -47,9 +48,7 @@ class OpenemrEcsStack(Stack):
         self._create_efs_volume()
         self._create_backup()
         self._create_ecs_cluster()
-        self._create_tls_certificates()
-        self._create_app_mesh_and_log_group()
-        self._create_proxy_service()
+        self._create_and_maintain_tls_materials()
         self._create_openemr_service()
 
     def _create_vpc(self):
@@ -67,7 +66,7 @@ class OpenemrEcsStack(Stack):
             self,
             "OpenEmr-Vpc",
             ip_addresses=ec2.IpAddresses.cidr(self.cidr),
-            max_azs=3,
+            max_azs=2,
             subnet_configuration=[
                 ec2.SubnetConfiguration(
                     name="private-subnet",
@@ -316,16 +315,11 @@ class OpenemrEcsStack(Stack):
                                     versioned=True
                                     )
 
-            # Create private_dns_namespace
-            self.private_dns_namespace = servicediscovery.PrivateDnsNamespace(self, "OpenEMRPrivateDNSNamespace",
-                                                     vpc=self.vpc,
-                                                     name=self.private_dns_namespace_name
-                                                     )
-
             # Create cluster
             self.ecs_cluster = ecs.Cluster(self, "ecs-cluster",
                                   vpc=self.vpc,
                                   container_insights=True,
+                                  enable_fargate_capacity_providers=True,
                                   execute_command_configuration=ecs.ExecuteCommandConfiguration(
                                       kms_key=self.kms_key,
                                       log_configuration=ecs.ExecuteCommandLogConfiguration(
@@ -340,20 +334,23 @@ class OpenemrEcsStack(Stack):
                                   )
 
         else:
-            # Create private_dns_namespace
-            self.private_dns_namespace = servicediscovery.PrivateDnsNamespace(self, "OpenEMRPrivateDNSNamespace",
-                                                     vpc=self.vpc,
-                                                     name=self.private_dns_namespace_name
-                                                     )
 
             # Create cluster
             self.ecs_cluster = ecs.Cluster(self, "ecs-cluster",
                                   vpc=self.vpc,
-                                  container_insights=True
+                                  container_insights=True,
+                                  enable_fargate_capacity_providers=True
                                   )
 
         # Add dependency so cluster is not created before the database
         self.ecs_cluster.node.add_dependency(self.db_instance)
+
+        # Create log group for container logging
+        self.log_group = logs.LogGroup(
+            self,
+            "log-group",
+            retention=logs.RetentionDays.ONE_WEEK,
+        )
 
     def _create_efs_volume(self):
         # Create EFS for sites folder
@@ -387,81 +384,129 @@ class OpenemrEcsStack(Stack):
             transit_encryption="ENABLED"
         )
 
-    def _create_tls_certificates(self):
-        # Create private certificate authority
-        self.private_certificate_authority = acmpca.CfnCertificateAuthority(self, "CA",
-                                                                       type="ROOT",
-                                                                       key_algorithm="RSA_2048",
-                                                                       signing_algorithm="SHA256WITHRSA",
-                                                                       subject=acmpca.CfnCertificateAuthority.SubjectProperty(
-                                                                           common_name="OpenEMRPrivateCA"
-                                                                       )
-                                                                       )
+    def _create_and_maintain_tls_materials(self):
 
-        # Create activation certificate for private certificate authority
-        activation_certificate = acmpca.CfnCertificate(self, "MyCfnCertificate",
-                                                       certificate_authority_arn=self.private_certificate_authority.attr_arn,
-                                                       certificate_signing_request=self.private_certificate_authority.attr_certificate_signing_request,
-                                                       signing_algorithm="SHA256WITHRSA",
-                                                       template_arn='arn:aws:acm-pca:::template/RootCACertificate/V1',
-                                                       validity=acmpca.CfnCertificate.ValidityProperty(
-                                                           type="YEARS",
-                                                           value=10
-                                                       )
-                                                       )
-        activation_certificate.apply_removal_policy(RemovalPolicy.DESTROY)
-
-        #Give permissions for ACM to issue certificates from private certificate authority and activate the authority
-        cfn_permission = acmpca.CfnPermission(self, "MyCfnPermission",
-                                              actions=["IssueCertificate", "GetCertificate", "ListPermissions"],
-                                              certificate_authority_arn=self.private_certificate_authority.attr_arn,
-                                              principal="acm.amazonaws.com",
-                                              )
-        self.certificate_authority_activation = acmpca.CfnCertificateAuthorityActivation(self,
-                                                                                    "MyCfnCertificateAuthorityActivation",
-                                                                                    certificate=activation_certificate.attr_certificate,
-                                                                                    certificate_authority_arn=self.private_certificate_authority.attr_arn,
-                                                                                    status='ACTIVE'
-                                                                                    )
-        self.certificate_authority_activation.apply_removal_policy(RemovalPolicy.DESTROY)
-        self.certificate_authority_activation.node.add_dependency(cfn_permission)
-
-
-        # Create private certificates using private certificate authority; wait for activation to complete first.
-        self.private_certificate_gateway = acm.CfnCertificate(self, "PrivateCertificateGateway",
-                                                 domain_name="*."+self.private_dns_namespace.namespace_name,
-                                                 certificate_authority_arn=self.private_certificate_authority.attr_arn
-                                                 )
-        self.private_certificate_gateway.node.add_dependency(self.certificate_authority_activation)
-        self.tls_certificate_gateway = acm.Certificate.from_certificate_arn(
-            self, "tlsCertGateway", self.private_certificate_gateway.ref)
-
-        self.private_certificate_backend = acm.CfnCertificate(self, "PrivateCertificateBackend",
-                                                 domain_name="*."+self.private_dns_namespace.namespace_name,
-                                                 certificate_authority_arn=self.private_certificate_authority.attr_arn
-                                                 )
-        self.private_certificate_backend.node.add_dependency(self.certificate_authority_activation)
-        self.tls_certificate_backend = acm.Certificate.from_certificate_arn(
-            self, "tlsCertBackend", self.private_certificate_backend.ref)
-
-        # Create private certificate authority ACMPA object
-        self.private_certificate_authority_acmpa_object = acmpca.CertificateAuthority.from_certificate_authority_arn(self,
-                                                                                                "CertificateAuthority",
-                                                                                                 self.private_certificate_authority.attr_arn)
-    def _create_app_mesh_and_log_group(self):
-        # Create AppMesh mesh
-        self.mesh = appmesh.Mesh(self, "AppMesh",
-                            mesh_name="OpenEMRAppMesh"
-                            )
-
-        # Create log group for container logging
-        self.log_group = logs.LogGroup(
+        # Create generate SSL materials task definition
+        create_ssl_materials_task = ecs.FargateTaskDefinition(
             self,
-            "log-group",
-            retention=logs.RetentionDays.ONE_WEEK,
+            "CreateSSLMaterialsTaskDefinition",
+            cpu=256,
+            memory_limit_mib=512,
+            runtime_platform=ecs.RuntimePlatform(
+                cpu_architecture=ecs.CpuArchitecture.ARM64
+            )
+        )
+        create_ssl_materials_task.add_volume(
+            name='SslFolderVolume',
+            efs_volume_configuration=self.efs_volume_configuration_for_ssl_folder
         )
 
-    def _create_proxy_service(self):
+        # This script generates self-signed SSL materials using OpenSSL.
+        command_array = [
+            "mkdir -p /etc/ssl/certs/ && \
+            mkdir -p /etc/ssl/private/ && \
+            openssl genrsa 2048 > /etc/ssl/private/selfsigned.key.pem && \
+            openssl req -new -x509 -nodes -sha256 -days 365 -key /etc/ssl/private/selfsigned.key.pem \
+            -outform PEM -out /etc/ssl/certs/selfsigned.cert.pem -config /swarm-pieces/ssl/openssl.cnf \
+            -subj '/CN=localhost' && \
+            cp /etc/ssl/private/selfsigned.key.pem /etc/ssl/private/webserver.key.pem && \
+            cp /etc/ssl/certs/selfsigned.cert.pem /etc/ssl/certs/webserver.cert.pem && \
+            touch /etc/ssl/docker-selfsigned-configured"
+        ]
+
+        # Add container definition for a container with OpenSSL to the original task
+        ssl_maintenance_container = create_ssl_materials_task.add_container("AmazonLinuxContainer",
+            logging=ecs.LogDriver.aws_logs(stream_prefix="ecs/sslmaintenance", log_group=self.log_group,),
+            port_mappings=[ecs.PortMapping(container_port=self.container_port)],
+            essential=True,
+            container_name="openemr",
+            entry_point=["/bin/sh", "-c"],
+            command=command_array,
+            image=ecs.ContainerImage.from_registry("openemr/openemr:7.0.2")
+        )
+
+        # Create mount point for EFS for ssl folder
+        efs_mount_point_for_ssl_folder = ecs.MountPoint(
+            container_path="/etc/ssl/",
+            read_only=False,
+            source_volume='SslFolderVolume'
+        )
+
+        # Add mount points to container definition
+        ssl_maintenance_container.add_mount_points(
+            efs_mount_point_for_ssl_folder
+        )
+
+        # Get private subnet ID string
+        private_subnets_ids = [ps.subnet_id for ps in self.vpc.private_subnets]
+        private_subnet_id_string = ','.join(private_subnets_ids)
+
+        # # Create EFS only security group and get ID
+        self.efs_only_security_group = ec2.SecurityGroup(self,
+                                                         "EFSOnlySecurityGroup",
+                                                         vpc=self.vpc
+                                                         )
+        security_group_id = self.efs_only_security_group.security_group_id
+
+        # Add ability for the security group to access the EFS with the SSL materials
+        self.file_system_for_ssl_folder.connections.allow_default_port_from(self.efs_only_security_group)
+
+        # Create generate SSL materials Lambda
+        create_ssl_materials_lambda = _lambda.Function(
+            self, 'MaintainSSLMaterialsLambda',
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            code=_lambda.Code.from_asset('lambda'),
+            architecture=_lambda.Architecture.ARM_64,
+            handler='maintain_ssl_materials.handler',
+            timeout=Duration.minutes(10)
+        )
+
+        # Create IAM policy statement to add to task role
+        policy_statement = iam.PolicyStatement(
+            effect=iam.Effect.ALLOW,
+            actions=["ecs:RunTask", "ecs:DescribeTasks"],
+            resources=["*"]
+        )
+        policy_statement.add_condition("ArnEquals", {"ecs:cluster": self.ecs_cluster.cluster_arn})
+
+        # Add permissions to task role
+        create_ssl_materials_task.grant_run(create_ssl_materials_lambda.grant_principal)
+        create_ssl_materials_lambda.add_to_role_policy(policy_statement)
+
+        # Add environment variables
+        create_ssl_materials_lambda.add_environment('ECS_CLUSTER',self.ecs_cluster.cluster_arn)
+        create_ssl_materials_lambda.add_environment('TASK_DEFINITION',create_ssl_materials_task.task_definition_arn)
+        create_ssl_materials_lambda.add_environment('SUBNETS',private_subnet_id_string)
+        create_ssl_materials_lambda.add_environment('SECURITY_GROUPS',security_group_id)
+
+        # Add schedule so function runs on regular interval
+        rule_to_run_on_regular_interval = events.Rule(
+            self,
+            "RegularScheduleforSSLMaintenance",
+            schedule=events.Schedule.rate(Duration.days(self.number_of_days_to_regenerate_ssl_materials)),
+            targets=[event_targets.LambdaFunction(create_ssl_materials_lambda)]
+        )
+
+        # Create a function and run it once so that SSL is set up before the OpenEMR containers start
+        self.one_time_create_ssl_materials_lambda = triggers.TriggerFunction(self, "MyTrigger",
+                                 runtime=_lambda.Runtime.PYTHON_3_12,
+                                 code=_lambda.Code.from_asset('lambda'),
+                                 handler='maintain_ssl_materials.handler',
+                                 timeout=Duration.minutes(10)
+                                 )
+
+        # Add permissions to task role
+        create_ssl_materials_task.grant_run(self.one_time_create_ssl_materials_lambda.grant_principal)
+        self.one_time_create_ssl_materials_lambda.add_to_role_policy(policy_statement)
+
+        # Add environment variables
+        self.one_time_create_ssl_materials_lambda.add_environment('ECS_CLUSTER',self.ecs_cluster.cluster_arn)
+        self.one_time_create_ssl_materials_lambda.add_environment('TASK_DEFINITION',create_ssl_materials_task.task_definition_arn)
+        self.one_time_create_ssl_materials_lambda.add_environment('SUBNETS',private_subnet_id_string)
+        self.one_time_create_ssl_materials_lambda.add_environment('SECURITY_GROUPS',security_group_id)
+
+    def _create_openemr_service(self):
+
         # Test for user supplied certificate
         if self.node.try_get_context("certificate_arn"):
             self.user_provided_certificate = acm.Certificate.from_certificate_arn(
@@ -472,300 +517,16 @@ class OpenemrEcsStack(Stack):
         else:
             self.user_provided_certificate = None
 
-        # Create proxy Fargate task definition
-        proxy_fargate_task_definition = ecs.FargateTaskDefinition(
-            self,
-            "ProxyFargateTaskDefinition",
-            cpu=256,
-            memory_limit_mib=512,
-            runtime_platform=ecs.RuntimePlatform(
-                cpu_architecture=ecs.CpuArchitecture.ARM64
-            )
-        )
-
-        # Create envoy proxy container definition
-        envoy_container = proxy_fargate_task_definition.add_container(
-        "ProxyEnvoyContainer",
-            logging=ecs.LogDriver.aws_logs(
-               stream_prefix="ecs/mesh-gateway",
-               log_group=self.log_group,
-            ),
-            environment={
-               'ENVOY_LOG_LEVEL': "info",
-               'AWS_REGION': self.region,
-               'REGION': self.region,
-               'ENABLE_ENVOY_XRAY_TRACING': '1',
-               'ENABLE_ENVOY_STATS_TAGS': '1',
-            },
-            essential=True,
-            container_name="envoy",
-            port_mappings=[
-               ecs.PortMapping(container_port=self.container_port),
-               ecs.PortMapping(container_port=9901)
-            ],
-            health_check=ecs.HealthCheck(
-               command=["CMD-SHELL", "curl -s http://localhost:9901/server_info | grep state | grep -q LIVE"],
-               start_period=Duration.seconds(
-                   10),
-               interval=Duration.seconds(5),
-               timeout=Duration.seconds(2),
-               retries=3
-            ),
-            image=ecs.ContainerImage.from_registry(
-               "public.ecr.aws/appmesh/aws-appmesh-envoy:v1.25.4.0-prod"),
-        )
-
-        # Create Xray container definition
-        xray_container = proxy_fargate_task_definition.add_container(
-        "ProxyXrayContainer",
-            logging=ecs.LogDriver.aws_logs(
-              stream_prefix="ecs/mesh-gateway-xray",
-              log_group=self.log_group,
-            ),
-            environment={
-                'AWS_REGION': self.region,
-                'REGION': self.region
-            },
-            essential=True,
-            container_name="xray",
-            user='1337',
-            image=ecs.ContainerImage.from_registry(
-              "public.ecr.aws/xray/aws-xray-daemon:3.3.7"),
-        )
-
-        # Create container dependency
-        envoy_container.add_container_dependencies(ecs.ContainerDependency(
-              container=xray_container,
-              condition=ecs.ContainerDependencyCondition.START
-          )
-        )
-
-        #Create proxy service with load balancer
-        if self.user_provided_certificate:
-            proxy_application_load_balanced_fargate_service = ecs_patterns.ApplicationLoadBalancedFargateService(
-                self, "appmesh-openemr-gateway",
-                certificate=self.user_provided_certificate,
-                cluster=self.ecs_cluster,
-                desired_count=self.node.try_get_context("proxy_service_fargate_minimum_capacity"),
-                load_balancer=self.alb,
-                open_listener=False,
-                target_protocol=elb.ApplicationProtocol.HTTPS,
-                task_definition=proxy_fargate_task_definition,
-                cloud_map_options=ecs.CloudMapOptions(
-                    cloud_map_namespace=self.private_dns_namespace,
-                )
-            )
-        else:
-            proxy_application_load_balanced_fargate_service = ecs_patterns.ApplicationLoadBalancedFargateService(
-                self, "OpenEMRFargateLBService",
-                cluster=self.ecs_cluster,
-                desired_count=self.node.try_get_context("proxy_service_fargate_minimum_capacity"),
-                load_balancer=self.alb,
-                open_listener=False,
-                target_protocol=elb.ApplicationProtocol.HTTPS,
-                task_definition=proxy_fargate_task_definition,
-                cloud_map_options=ecs.CloudMapOptions(
-                    cloud_map_namespace=self.private_dns_namespace,
-                )
-            )
-        proxy_service = proxy_application_load_balanced_fargate_service.service
-
-        # Create virtual gateway
-        self.virtual_gateway = appmesh.VirtualGateway(self, "VirtualGatewayProxy",
-                                                 mesh=self.mesh,
-                                                 virtual_gateway_name=proxy_service.cloud_map_service.service_name,
-                                                 listeners=[appmesh.VirtualGatewayListener.http(
-                                                     port=self.container_port,
-                                                     tls=appmesh.ListenerTlsOptions(
-                                                         mode=appmesh.TlsMode.STRICT,
-                                                         certificate=appmesh.TlsCertificate.acm(
-                                                             self.tls_certificate_gateway
-                                                         )
-                                                     )
-                                                 )],
-                                                 backend_defaults=appmesh.BackendDefaults(
-                                                 tls_client_policy=appmesh.TlsClientPolicy(
-                                                      ports=[self.container_port],
-                                                      validation=appmesh.TlsValidation(
-                                                          trust=appmesh.TlsValidationTrust.acm(
-                                                              certificate_authorities=[
-                                                                  self.private_certificate_authority_acmpa_object
-                                                            ])
-                                                      )
-                                                  )
-                                                 )
-                                             )
-
-        # Only make virtual gateway after private certificate authority is active
-        self.virtual_gateway.node.add_dependency(self.certificate_authority_activation)
-
-        # Add environment variable for virtual gateway ARN to envoy proxy container
-        envoy_container.add_environment('APPMESH_RESOURCE_ARN', self.virtual_gateway.virtual_gateway_arn)
-
-        # Configure health check
-        proxy_application_load_balanced_fargate_service.target_group.configure_health_check(
-            protocol=elb.Protocol.HTTP,
-            interval=Duration.seconds(10),
-            port='9901',
-            path='/server_info'
-        )
-
-        # Set up ECS Exec for Debuggging
-        if self.node.try_get_context("enable_ecs_exec") == "true":
-            cfn_proxy_service = proxy_service.node.default_child
-            cfn_proxy_service.add_property_override("EnableExecuteCommand", "True")
-            proxy_fargate_task_definition.task_role.add_to_policy(
-                iam.PolicyStatement(
-                    actions=["ssmmessages:CreateControlChannel",
-                             "ssmmessages:CreateDataChannel",
-                             "ssmmessages:OpenControlChannel",
-                             "ssmmessages:OpenDataChannel",],
-                    resources=["*"])
-            )
-            proxy_fargate_task_definition.task_role.add_to_policy(
-                iam.PolicyStatement(
-                    actions=["s3:PutObject",
-                             "s3:GetEncryptionConfiguration"],
-                    resources=[self.exec_bucket.bucket_arn,
-                               self.exec_bucket.bucket_arn+'/*'])
-            )
-            proxy_fargate_task_definition.task_role.add_to_policy(
-                iam.PolicyStatement(
-                    actions=["logs:DescribeLogGroups"],
-                    resources=["*"])
-            )
-            proxy_fargate_task_definition.task_role.add_to_policy(
-                iam.PolicyStatement(
-                    actions=["logs:CreateLogStream",
-                             "logs:DescribeLogStreams",
-                             "logs:PutLogEvents"],
-                    resources=[self.ecs_exec_group.log_group_arn])
-            )
-            proxy_fargate_task_definition.task_role.add_to_policy(
-                iam.PolicyStatement(
-                    actions=["kms:Decrypt",
-                             "kms:GenerateDataKey"],
-                    resources=[self.kms_key.key_arn])
-            )
-
-        # Add permission to import certificates to ACM
-        proxy_fargate_task_definition.task_role.add_to_policy(
-            iam.PolicyStatement(
-                actions=["acm:ImportCertificate"],
-                resources=["arn:aws:acm:"+self.region+":"+self.account+":certificate/*"])
-        )
-
-        # Add permissions to export certificates from ACM
-        proxy_fargate_task_definition.task_role.add_to_policy(
-            iam.PolicyStatement(
-                actions=["acm:ExportCertificate"],
-                resources=[self.private_certificate_gateway.ref])
-        )
-        proxy_fargate_task_definition.task_role.add_to_policy(
-            iam.PolicyStatement(
-                actions=["acm:ExportCertificate"],
-                resources=[self.private_certificate_backend.ref])
-        )
-
-        # Add permissions to describe certificates from ACM
-        proxy_fargate_task_definition.task_role.add_to_policy(
-            iam.PolicyStatement(
-                actions=["acm:DescribeCertificate"],
-                resources=[self.private_certificate_gateway.ref])
-        )
-        proxy_fargate_task_definition.task_role.add_to_policy(
-            iam.PolicyStatement(
-                actions=["acm:DescribeCertificate"],
-                resources=[self.private_certificate_backend.ref])
-        )
-
-        # Add permission to describe subnets
-        proxy_fargate_task_definition.execution_role.add_to_policy(
-            iam.PolicyStatement(
-                actions=['ec2:DescribeSubnets'],
-                resources=['*']
-            )
-        )
-
-        # Add permission to export certificates from private certificate authority and to describe it
-        proxy_fargate_task_definition.task_role.add_to_policy(
-            iam.PolicyStatement(
-                actions=["acm-pca:GetCertificateAuthorityCertificate",
-                         "acm-pca:DescribeCertificateAuthority"],
-                resources=[self.private_certificate_authority.attr_arn])
-        )
-
-        # Add managed policies for AWS App Mesh and Xray
-        proxy_fargate_task_definition.execution_role.add_managed_policy(
-            iam.ManagedPolicy.from_aws_managed_policy_name("AmazonEC2ContainerRegistryReadOnly")
-        )
-        proxy_fargate_task_definition.execution_role.add_managed_policy(
-            iam.ManagedPolicy.from_aws_managed_policy_name("CloudWatchLogsFullAccess")
-        )
-        proxy_fargate_task_definition.task_role.add_managed_policy(
-            iam.ManagedPolicy.from_aws_managed_policy_name("AWSAppMeshEnvoyAccess")
-        )
-        proxy_fargate_task_definition.task_role.add_managed_policy(
-            iam.ManagedPolicy.from_aws_managed_policy_name("CloudWatchFullAccess")
-        )
-        proxy_fargate_task_definition.task_role.add_managed_policy(
-            iam.ManagedPolicy.from_aws_managed_policy_name("AWSXRayDaemonWriteAccess")
-        )
-
-        # Allow connections to and from load balancer security group on the container port and health check port
-        proxy_service.connections.allow_from(self.lb_sec_group, ec2.Port.tcp(self.container_port))
-        proxy_service.connections.allow_to(self.lb_sec_group, ec2.Port.tcp(self.container_port))
-        proxy_service.connections.allow_from(self.lb_sec_group, ec2.Port.tcp(9901))
-        proxy_service.connections.allow_to(self.lb_sec_group, ec2.Port.tcp(9901))
-
-        # Create object for service so that we can connect it to the backend service
-        self.proxy_service = proxy_service
-
-        # Add CPU and memory utilization based autoscaling
-        proxy_scalable_target = (
-            proxy_service.auto_scale_task_count(
-                min_capacity=self.node.try_get_context("proxy_service_fargate_minimum_capacity"),
-                max_capacity=self.node.try_get_context("proxy_service_fargate_maximum_capacity")
-            )
-        )
-
-        proxy_scalable_target.scale_on_cpu_utilization(
-            "ProxyCPUScaling",
-            target_utilization_percent=self.node.try_get_context("proxy_service_fargate_cpu_autoscaling_percentage")
-        )
-
-        proxy_scalable_target.scale_on_memory_utilization(
-            "ProxyMemoryScaling",
-            target_utilization_percent=self.node.try_get_context("proxy_service_fargate_memory_autoscaling_percentage")
-        )
-
-    def _create_openemr_service(self):
         # Create OpenEMR task definition
         openemr_fargate_task_definition = ecs.FargateTaskDefinition(
             self,
             "OpenEMRFargateTaskDefinition",
-            cpu=2048,
-            memory_limit_mib=4096,
+            cpu=1024,
+            memory_limit_mib=2048,
             runtime_platform=ecs.RuntimePlatform(
                 cpu_architecture=ecs.CpuArchitecture.ARM64
             )
         )
-
-        # Set egress ports to ignore connections to EFS port (2049), HTTPS for curl (443), MySQL port, and Redis port.
-        proxy_configuration_properties = [
-            {"Name": "IgnoredUID", "Value": str(1337)},
-            {"Name": "AppPorts", "Value": str(self.container_port)},
-            {"Name": "ProxyIngressPort", "Value": str(15000)},
-            {"Name": "ProxyEgressPort", "Value": str(15001)},
-            {"Name": "EgressIgnoredPorts",
-             "Value": "2049,443" + ',' + str(self.redis_port) + ',' + str(self.mysql_port)},
-            {"Name": "EgressIgnoredIPs", "Value": "169.254.170.2,169.254.169.254"}
-        ]
-        cfn_fargate_task_definition = openemr_fargate_task_definition.node.default_child
-        cfn_fargate_task_definition.add_property_override("ProxyConfiguration.ContainerName", "envoy")
-        cfn_fargate_task_definition.add_property_override("ProxyConfiguration.Type", "APPMESH")
-        cfn_fargate_task_definition.add_property_override("ProxyConfiguration.ProxyConfigurationProperties",
-                                                          proxy_configuration_properties)
 
         # Add volumes to task definition
         openemr_fargate_task_definition.add_volume(
@@ -786,6 +547,7 @@ class OpenemrEcsStack(Stack):
             cp /root/certs/mysql/server/mysql-ca /root/certs/redis/redis-ca && \
             chown apache /root/certs/redis/redis-ca && \
             chmod +x ./openemr.sh && \
+            echo "1 23  *   *   *   httpd -k graceful" >> /etc/crontabs/root && \
             ./openemr.sh'
         ]
 
@@ -810,7 +572,7 @@ class OpenemrEcsStack(Stack):
 
         # Add OpenEMR container definition to original task
         openemr_container = openemr_fargate_task_definition.add_container("OpenEMRContainer",
-            logging=ecs.LogDriver.aws_logs(stream_prefix="ecs/openemr", log_group=self.log_group,),
+            logging=ecs.LogDriver.aws_logs(stream_prefix="ecs/openemr", log_group=self.log_group),
             port_mappings=[ecs.PortMapping(container_port=self.container_port)],
             essential=True,
             container_name="openemr",
@@ -846,125 +608,40 @@ class OpenemrEcsStack(Stack):
             efs_mount_point_for_ssl_folder
         )
 
-        # Create fargate service for OpenEMR
-        if self.node.try_get_context("enable_ecs_exec") == "true":
-            openemr_service = ecs.FargateService(
-                                self,
-                                "BackendService",
-                                cluster=self.ecs_cluster,
-                                desired_count=self.node.try_get_context("openemr_service_fargate_minimum_capacity"),
-                                enable_execute_command=True,
-                                task_definition=openemr_fargate_task_definition,
-                                cloud_map_options=ecs.CloudMapOptions(
-                                    cloud_map_namespace=self.private_dns_namespace,
-                                )
+        #Create proxy service with load balancer
+        if self.user_provided_certificate:
+            openemr_application_load_balanced_fargate_service = ecs_patterns.ApplicationLoadBalancedFargateService(
+                self, "OpenEMRFargateLBService",
+                certificate=self.user_provided_certificate,
+                cluster=self.ecs_cluster,
+                desired_count=self.node.try_get_context("openemr_service_fargate_minimum_capacity"),
+                load_balancer=self.alb,
+                open_listener=False,
+                target_protocol=elb.ApplicationProtocol.HTTPS,
+                task_definition=openemr_fargate_task_definition
             )
         else:
-            openemr_service = ecs.FargateService(
-                                self,
-                                "BackendService",
-                                cluster=self.ecs_cluster,
-                                desired_count=self.node.try_get_context("openemr_service_fargate_minimum_capacity"),
-                                enable_execute_command=False,
-                                task_definition=openemr_fargate_task_definition,
-                                cloud_map_options=ecs.CloudMapOptions(
-                                    cloud_map_namespace=self.private_dns_namespace,
-                                )
+            openemr_application_load_balanced_fargate_service = ecs_patterns.ApplicationLoadBalancedFargateService(
+                self, "OpenEMRFargateLBService",
+                cluster=self.ecs_cluster,
+                desired_count=self.node.try_get_context("openemr_service_fargate_minimum_capacity"),
+                load_balancer=self.alb,
+                open_listener=False,
+                target_protocol=elb.ApplicationProtocol.HTTPS,
+                task_definition=openemr_fargate_task_definition
             )
+        openemr_application_load_balanced_fargate_service.node.add_dependency(self.one_time_create_ssl_materials_lambda)
+        openemr_service = openemr_application_load_balanced_fargate_service.service
 
-        # Create OpenEMR Virtual Node
-        openemr_node = appmesh.VirtualNode(
-            self,
-            "OpenEMRNode",
-            mesh=self.mesh,
-            virtual_node_name=openemr_service.cloud_map_service.service_name,
-            listeners=[
-                appmesh.VirtualNodeListener.http(
-                    port=self.container_port,
-                    tls=appmesh.ListenerTlsOptions(
-                        mode=appmesh.TlsMode.STRICT,
-                        certificate=appmesh.TlsCertificate.acm(self.tls_certificate_backend)
-                    )
-                )
-            ],
-            service_discovery=appmesh.ServiceDiscovery.cloud_map(openemr_service.cloud_map_service)
-        )
-
-        # Create OpenEMR Virtual Service
-        virtual_service_name = "{}.{}".format(openemr_service.cloud_map_service.service_name,
-                                              openemr_service.cloud_map_service.namespace.namespace_name)
-        virtual_service = appmesh.VirtualService(self, "OpenEMRVirtualService",
-                                                 virtual_service_provider=appmesh.VirtualServiceProvider.virtual_node(
-                                                     openemr_node
-                                                 ),
-                                                 virtual_service_name=virtual_service_name
-                                                 )
-
-        # Add gateway route to virtual service
-        self.virtual_gateway.add_gateway_route(
-            "MeshGatewayRoute",
-            route_spec=appmesh.GatewayRouteSpec.http(
-                route_target=virtual_service
-            )
-        )
-
-        # Create envoy proxy container definition
-        envoy_container = openemr_fargate_task_definition.add_container(
-            "OpenEMREnvoyContainer",
-            logging=ecs.LogDriver.aws_logs(
-                stream_prefix="ecs/openemr-envoy-proxy",
-                log_group=self.log_group,
-            ),
-            environment={
-                'APPMESH_RESOURCE_ARN': openemr_node.virtual_node_arn,
-                'ENVOY_LOG_LEVEL': "info",
-                'AWS_REGION': self.region,
-                'REGION': self.region,
-                'ENABLE_ENVOY_XRAY_TRACING': '1',
-                'ENABLE_ENVOY_STATS_TAGS': '1',
-            },
-            essential=True,
-            container_name="envoy",
-            health_check=ecs.HealthCheck(
-                command=["CMD-SHELL", "curl -s http://localhost:9901/server_info | grep state | grep -q LIVE"],
-                start_period=Duration.seconds(10),
-                interval=Duration.seconds(5),
-                timeout=Duration.seconds(2),
-                retries=3
-            ),
-            user='1337',
-            image=ecs.ContainerImage.from_registry(
-                "public.ecr.aws/appmesh/aws-appmesh-envoy:v1.25.4.0-prod"),
-        )
-
-        # Create Xray container definition
-        xray_container = openemr_fargate_task_definition.add_container(
-            "OpenEMRXrayContainer",
-            logging=ecs.LogDriver.aws_logs(
-                stream_prefix="ecs/openemr-xray",
-                log_group=self.log_group,
-            ),
-            environment={
-                'AWS_REGION': self.region,
-                'REGION': self.region
-            },
-            essential=True,
-            container_name="xray",
-            user='1337',
-            image=ecs.ContainerImage.from_registry(
-                "public.ecr.aws/xray/aws-xray-daemon:3.3.7"),
-        )
-
-        # Create container dependency
-        envoy_container.add_container_dependencies(ecs.ContainerDependency(
-            container=xray_container,
-            condition=ecs.ContainerDependencyCondition.START
-        )
-        )
-        openemr_container.add_container_dependencies(ecs.ContainerDependency(
-            container=envoy_container,
-            condition=ecs.ContainerDependencyCondition.HEALTHY,
-        )
+        # Configure health check
+        openemr_application_load_balanced_fargate_service.target_group.configure_health_check(
+            protocol=elb.Protocol.HTTPS,
+            path="/",
+            port='443',
+            healthy_http_codes="302",
+            healthy_threshold_count=2,
+            unhealthy_threshold_count=3,
+            interval=Duration.seconds(300)
         )
 
         # Set up ECS Exec for Debuggging
@@ -1005,44 +682,12 @@ class OpenemrEcsStack(Stack):
                     resources=[self.kms_key.key_arn])
             )
 
-        # Add permissions to export certificates from ACM
-        openemr_fargate_task_definition.task_role.add_to_policy(
-            iam.PolicyStatement(
-                actions=["acm:ExportCertificate"],
-                resources=[self.private_certificate_gateway.ref])
-        )
-        openemr_fargate_task_definition.task_role.add_to_policy(
-            iam.PolicyStatement(
-                actions=["acm:ExportCertificate"],
-                resources=[self.private_certificate_backend.ref])
-        )
-
-        # Add permissions to describe certificates from ACM
-        openemr_fargate_task_definition.task_role.add_to_policy(
-            iam.PolicyStatement(
-                actions=["acm:DescribeCertificate"],
-                resources=[self.private_certificate_gateway.ref])
-        )
-        openemr_fargate_task_definition.task_role.add_to_policy(
-            iam.PolicyStatement(
-                actions=["acm:DescribeCertificate"],
-                resources=[self.private_certificate_backend.ref])
-        )
-
         # Add permission to describe subnets
         openemr_fargate_task_definition.execution_role.add_to_policy(
             iam.PolicyStatement(
                 actions=['ec2:DescribeSubnets'],
                 resources=['*']
             )
-        )
-
-        # Add permission to export certificates from private certificate authority and to describe it
-        openemr_fargate_task_definition.task_role.add_to_policy(
-            iam.PolicyStatement(
-                actions=["acm-pca:GetCertificateAuthorityCertificate",
-                         "acm-pca:DescribeCertificateAuthority"],
-                resources=[self.private_certificate_authority.attr_arn])
         )
 
         # Add managed policies for AWS App Mesh and Xray
@@ -1053,13 +698,7 @@ class OpenemrEcsStack(Stack):
             iam.ManagedPolicy.from_aws_managed_policy_name("CloudWatchLogsFullAccess")
         )
         openemr_fargate_task_definition.task_role.add_managed_policy(
-            iam.ManagedPolicy.from_aws_managed_policy_name("AWSAppMeshEnvoyAccess")
-        )
-        openemr_fargate_task_definition.task_role.add_managed_policy(
             iam.ManagedPolicy.from_aws_managed_policy_name("CloudWatchFullAccess")
-        )
-        openemr_fargate_task_definition.task_role.add_managed_policy(
-            iam.ManagedPolicy.from_aws_managed_policy_name("AWSXRayDaemonWriteAccess")
         )
 
         # Allow conenctions to and from both of our EFSs for our Fargate service
@@ -1067,10 +706,6 @@ class OpenemrEcsStack(Stack):
         openemr_service.connections.allow_from(self.file_system_for_sites_folder, ec2.Port.tcp(2049))
         openemr_service.connections.allow_to(self.file_system_for_ssl_folder, ec2.Port.tcp(2049))
         openemr_service.connections.allow_to(self.file_system_for_sites_folder, ec2.Port.tcp(2049))
-
-        # Allow inter-service communication
-        openemr_service.connections.allow_from(self.proxy_service.connections, ec2.Port.tcp(self.container_port))
-        openemr_service.connections.allow_to(self.proxy_service.connections, ec2.Port.tcp(self.container_port))
 
         # Allow connections to and from our database for our fargate service
         openemr_service.connections.allow_from(self.db_instance, ec2.Port.tcp(self.mysql_port))
