@@ -161,7 +161,7 @@ This solution uses a variety of AWS services including [Amazon ECS](https://aws.
 You'll pay for the AWS resources you use with this architecture but since that will depend on your level of usage we'll compute an estimate of the base cost of this architecture (this will vary from region to region).
 
 - Elasticache Serverless ($0.125/hour base cost)
-- Aurora Serverless v1 ($0.12/hour base cost)
+- Aurora Serverless v2 ($0.12/hour base cost)
 - AWS Fargate ($0.08612/hour base cost)
 - 1 Application Load Balancer($0.0225/hour base cost)
 - 2 NAT Gateways ($0.09/hour base cost)

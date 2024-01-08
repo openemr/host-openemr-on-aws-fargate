@@ -235,36 +235,36 @@ class OpenemrEcsStack(Stack):
         )
 
         db_credentials = rds.Credentials.from_secret(db_secret)
+
         parameter_group = rds.ParameterGroup(
             self,
             "ParameterGroup",
             engine=rds.DatabaseClusterEngine.AURORA_MYSQL,
             parameters={
-                "server_audit_logs_upload":"1",
-                "general_log":"1",
-                "slow_query_log":"1"
+                "server_audit_logs_upload": "1",
+                "log_queries_not_using_indexes": "1",
+                "general_log": "1",
+                "slow_query_log": "1",
+                "server_audit_logging":"1",
+                "server_audit_events":"CONNECT,QUERY,QUERY_DCL,QUERY_DDL,QUERY_DML,TABLE"
 
             }
         )
-        self.db_instance = rds.ServerlessCluster(
-            self,
-            "DatabaseCluster",
-            vpc=self.vpc,
-            engine=rds.DatabaseClusterEngine.AURORA_MYSQL,
-            security_groups=[self.db_sec_group],
-            vpc_subnets=ec2.SubnetSelection(
-                subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
-            ),
-            credentials=db_credentials,
-            parameter_group=parameter_group,
-            scaling=rds.ServerlessScalingOptions(
-                auto_pause=Duration.minutes(0),
-                min_capacity=rds.AuroraCapacityUnit.ACU_1,
-                max_capacity=rds.AuroraCapacityUnit.ACU_256
-            )
-        )
-        cfn_db_instance = self.db_instance.node.default_child
-        cfn_db_instance.cloudwatch_logs_exports = ["audit","error","general","slowquery"]
+
+        self.db_instance = rds.DatabaseCluster(self, "DatabaseCluster",
+                engine=rds.DatabaseClusterEngine.aurora_mysql(version=rds.AuroraMysqlEngineVersion.VER_3_05_1),
+                cloudwatch_logs_exports=["audit", "error", "general", "slowquery"],
+                writer=rds.ClusterInstance.serverless_v2("writer"),
+                serverless_v2_min_capacity=0.5,
+                serverless_v2_max_capacity=128,
+                credentials=db_credentials,
+                readers=[rds.ClusterInstance.serverless_v2("reader")],
+                security_groups=[self.db_sec_group],
+                vpc_subnets=ec2.SubnetSelection(
+                    subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
+                ),
+                vpc=self.vpc
+                )
 
     def _create_redis_cluster(self):
         private_subnets_ids = [ps.subnet_id for ps in self.vpc.private_subnets]
@@ -540,12 +540,12 @@ class OpenemrEcsStack(Stack):
 
         # This script sets up certificates to allow for the usage of ElastiCache and RDS with SSL/TLS.
         command_array = [
-            'curl --cacert /swarm-pieces/ssl/certs/ca-certificates.crt -o /root/certs/mysql/server/mysql-ca \
+            'curl --cacert /swarm-pieces/ssl/certs/ca-certificates.crt -o /root/certs/redis/redis-ca \
             --create-dirs https://www.amazontrust.com/repository/AmazonRootCA1.pem && \
-            chown apache /root/certs/mysql/server/mysql-ca && \
-            mkdir -p /root/certs/redis && \
-            cp /root/certs/mysql/server/mysql-ca /root/certs/redis/redis-ca && \
             chown apache /root/certs/redis/redis-ca && \
+            curl --cacert /swarm-pieces/ssl/certs/ca-certificates.crt -o /root/certs/mysql/server/mysql-ca \
+            --create-dirs https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem && \
+            chown apache /root/certs/mysql/server/mysql-ca && \
             chmod +x ./openemr.sh && \
             echo "1 23  *   *   *   httpd -k graceful" >> /etc/crontabs/root && \
             ./openemr.sh'
