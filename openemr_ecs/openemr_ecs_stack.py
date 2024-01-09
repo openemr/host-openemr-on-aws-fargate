@@ -491,6 +491,7 @@ class OpenemrEcsStack(Stack):
         self.one_time_create_ssl_materials_lambda = triggers.TriggerFunction(self, "MyTrigger",
                                  runtime=_lambda.Runtime.PYTHON_3_12,
                                  code=_lambda.Code.from_asset('lambda'),
+                                 architecture=_lambda.Architecture.ARM_64,
                                  handler='maintain_ssl_materials.handler',
                                  timeout=Duration.minutes(10)
                                  )
