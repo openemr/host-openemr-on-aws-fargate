@@ -10,6 +10,7 @@
     + [3. Accessing OpenEMR](#3-accessing-openemr)
 - [Architecture](#architecture)
 - [Cost](#cost)
+- [Load Testing](#load-testing)
 - [Customizing Architecture Attributes](#customizing-architecture-attributes)
 - [Enabling HTTPS for Client to Load Balancer Communication](#enabling-https-for-client-to-load-balancer-communication)
 - [How AWS Backup is Used in this Architecture](#how-aws-backup-is-used-in-this-architecture)
@@ -169,6 +170,31 @@ You'll pay for the AWS resources you use with this architecture but since that w
 - 1 WAF ACL ($5/month)
 
 This works out to a base cost of $329.64/month. The true value of this architecture is its ability to rapidly autoscale and support even very large organizations. For smaller organizations you may want to consider looking at some of [OpenEMR's offerings in the AWS Marketplace](https://aws.amazon.com/marketplace/seller-profile?id=bec33905-edcb-4c30-b3ae-e2960a9a5ef4) which are more affordable.
+
+# Load Testing
+
+We conducted our own load testing and got promising results. On a Mac the steps to reproduce would be:
+
+- `brew install watch`
+- `brew install siege`
+- `watch -n0 siege -c 255 $ALB_URL -t60m`
+
+CPU and memory utilization did increase while stress testing occurred but average utilization peaked at 18.6% for CPU utilization and 30.4% for memory utilization. The architecture did not need to use ECS autoscaling to provision additional Fargate containers to handle the load and thus our base cost for Fargate did not increase beyond the base cost of $0.08612/hour during testing. The load balancer was comfortably serving more than 4000 requests/second and the active connection count peaked above 1300. The response time for all requests never exceeded 0.8s. Additionally RDS and Elasticache also performed well with ACU utilization and average read and write request latency remaining low. 
+
+We did not notice any change in the responsiveness of the UI while testing occurred. Detailed tables for metrics can be found below.
+
+ALB Metrics:<br />
+![alt text](./docs/load_balancer_metrics.png)
+![alt text](./docs/load_balancer_metrics_2.png)
+
+CPU and Memory Application Utilization Metrics:<br />
+![alt text](./docs/load_testing_cpu_and_memory_metrics.png)
+
+Redis on Elasticache Metrics:<br />
+![alt text](./docs/elasticache_metrics.png)
+
+RDS Metrics:<br />
+![alt text](./docs/rds_metrics.png)
 
 # Customizing Architecture Attributes
 
