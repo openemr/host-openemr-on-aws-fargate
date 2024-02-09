@@ -257,6 +257,7 @@ class OpenemrEcsStack(Stack):
                 writer=rds.ClusterInstance.serverless_v2("writer"),
                 serverless_v2_min_capacity=0.5,
                 serverless_v2_max_capacity=128,
+                storage_encrypted=True,
                 credentials=db_credentials,
                 readers=[rds.ClusterInstance.serverless_v2("reader", scale_with_writer=True)],
                 security_groups=[self.db_sec_group],
