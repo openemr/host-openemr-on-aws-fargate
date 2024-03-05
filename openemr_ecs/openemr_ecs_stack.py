@@ -252,7 +252,7 @@ class OpenemrEcsStack(Stack):
         )
 
         self.db_instance = rds.DatabaseCluster(self, "DatabaseCluster",
-                engine=rds.DatabaseClusterEngine.aurora_mysql(version=rds.AuroraMysqlEngineVersion.VER_3_05_1),
+                engine=rds.DatabaseClusterEngine.aurora_mysql(version=rds.AuroraMysqlEngineVersion.VER_3_05_2),
                 cloudwatch_logs_exports=["audit", "error", "general", "slowquery"],
                 writer=rds.ClusterInstance.serverless_v2("writer"),
                 serverless_v2_min_capacity=0.5,
