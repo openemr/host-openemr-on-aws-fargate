@@ -175,10 +175,18 @@ class OpenemrEcsStack(Stack):
                     ec2.Peer.ipv4(cidr),
                     ec2.Port.tcp(443),
                 )
+                self.lb_sec_group.add_egress_rule(
+                    ec2.Peer.ipv4(cidr),
+                    ec2.Port.tcp(443),
+                )
         else:
             cidr = self.node.try_get_context("security_group_ip_range")
             if cidr:
                 self.lb_sec_group.add_ingress_rule(
+                    ec2.Peer.ipv4(cidr),
+                    ec2.Port.tcp(80),
+                )
+                self.lb_sec_group.add_egress_rule(
                     ec2.Peer.ipv4(cidr),
                     ec2.Port.tcp(80),
                 )
