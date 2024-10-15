@@ -161,15 +161,15 @@ This solution uses a variety of AWS services including [Amazon ECS](https://aws.
 
 You'll pay for the AWS resources you use with this architecture but since that will depend on your level of usage we'll compute an estimate of the base cost of this architecture (this will vary from region to region).
 
-- Elasticache Serverless ($0.125/hour base cost)
 - Aurora Serverless v2 ($0.12/hour base cost)
-- AWS Fargate ($0.08612/hour base cost)
+- Elasticache Serverless ($0.084/hour base cost)
+- AWS Fargate ($0.079/hour base cost)
 - 1 Application Load Balancer ($0.0225/hour base cost)
 - 2 NAT Gateways ($0.09/hour base cost)
 - 2 Secrets Manager Secrets ($0.80/month)
 - 1 WAF ACL ($5/month)
 
-This works out to a base cost of $329.64/month. The true value of this architecture is its ability to rapidly autoscale and support even very large organizations. For smaller organizations you may want to consider looking at some of [OpenEMR's offerings in the AWS Marketplace](https://aws.amazon.com/marketplace/seller-profile?id=bec33905-edcb-4c30-b3ae-e2960a9a5ef4) which are more affordable.
+This works out to a base cost of $294.51/month. The true value of this architecture is its ability to rapidly autoscale and support even very large organizations. For smaller organizations you may want to consider looking at some of [OpenEMR's offerings in the AWS Marketplace](https://aws.amazon.com/marketplace/seller-profile?id=bec33905-edcb-4c30-b3ae-e2960a9a5ef4) which are more affordable.
 
 # Load Testing
 

@@ -33,7 +33,7 @@ class OpenemrEcsStack(Stack):
 
         self.cidr = "10.0.0.0/16"
         self.mysql_port = 3306
-        self.redis_port = 6379
+        self.valkey_port = 6379
         self.container_port = 443
         self.number_of_days_to_regenerate_ssl_materials = 2
         self._create_vpc()
@@ -44,7 +44,7 @@ class OpenemrEcsStack(Stack):
         self._create_environment_variables()
         self._create_password()
         self._create_db_instance()
-        self._create_redis_cluster()
+        self._create_valkey_cluster()
         self._create_efs_volume()
         self._create_backup()
         self._create_ecs_cluster()
@@ -156,9 +156,9 @@ class OpenemrEcsStack(Stack):
             vpc=self.vpc,
             allow_all_outbound=False
         )
-        self.redis_sec_group = ec2.SecurityGroup(
+        self.valkey_sec_group = ec2.SecurityGroup(
             self,
-            "redis-sec-group",
+            "valkey-sec-group",
             vpc=self.vpc,
             allow_all_outbound=False
         )
@@ -260,7 +260,7 @@ class OpenemrEcsStack(Stack):
         )
 
         self.db_instance = rds.DatabaseCluster(self, "DatabaseCluster",
-                engine=rds.DatabaseClusterEngine.aurora_mysql(version=rds.AuroraMysqlEngineVersion.VER_3_06_0),
+                engine=rds.DatabaseClusterEngine.aurora_mysql(version=rds.AuroraMysqlEngineVersion.VER_3_07_1),
                 cloudwatch_logs_exports=["audit", "error", "general", "slowquery"],
                 writer=rds.ClusterInstance.serverless_v2("writer"),
                 serverless_v2_min_capacity=0.5,
@@ -275,29 +275,29 @@ class OpenemrEcsStack(Stack):
                 vpc=self.vpc
                 )
 
-    def _create_redis_cluster(self):
+    def _create_valkey_cluster(self):
         private_subnets_ids = [ps.subnet_id for ps in self.vpc.private_subnets]
 
-        self.redis_cluster = elasticache.CfnServerlessCache(
+        self.valkey_cluster = elasticache.CfnServerlessCache(
             scope=self,
-            id="RedisCluster",
-            engine="redis",
-            serverless_cache_name="openemrredis",
+            id="ValkeyCluster",
+            engine="valkey",
+            serverless_cache_name="openemrvalkey",
             subnet_ids=private_subnets_ids,
-            security_group_ids=[self.redis_sec_group.security_group_id]
+            security_group_ids=[self.valkey_sec_group.security_group_id]
         )
 
-        self.redis_endpoint = ssm.StringParameter(
+        self.valkey_endpoint = ssm.StringParameter(
             self,
-            "redis-endpoint",
-            parameter_name="redis_endpoint",
-            string_value=self.redis_cluster.attr_endpoint_address
+            "valkey-endpoint",
+            parameter_name="valkey_endpoint",
+            string_value=self.valkey_cluster.attr_endpoint_address
         )
 
-        self.php_redis_tls_variable = ssm.StringParameter(
+        self.php_valkey_tls_variable = ssm.StringParameter(
             scope=self,
-            id="php-redis-tls-variable",
-            parameter_name="php_redis_tls_variable",
+            id="php-valkey-tls-variable",
+            parameter_name="php_valkey_tls_variable",
             string_value="yes"
         )
 
@@ -571,8 +571,8 @@ class OpenemrEcsStack(Stack):
             "MYSQL_PORT": ecs.Secret.from_ssm_parameter(self.mysql_port_var),
             "OE_USER": ecs.Secret.from_secrets_manager(self.password, "username"),
             "OE_PASS": ecs.Secret.from_secrets_manager(self.password, "password"),
-            "REDIS_SERVER": ecs.Secret.from_ssm_parameter(self.redis_endpoint),
-            "REDIS_TLS": ecs.Secret.from_ssm_parameter(self.php_redis_tls_variable),
+            "REDIS_SERVER": ecs.Secret.from_ssm_parameter(self.valkey_endpoint),
+            "REDIS_TLS": ecs.Secret.from_ssm_parameter(self.php_valkey_tls_variable),
             "SWARM_MODE": ecs.Secret.from_ssm_parameter(self.swarm_mode),
         }
         if self.node.try_get_context("activate_openemr_apis") == "true":
@@ -721,8 +721,8 @@ class OpenemrEcsStack(Stack):
         openemr_service.connections.allow_from(self.db_instance, ec2.Port.tcp(self.mysql_port))
         openemr_service.connections.allow_to(self.db_instance, ec2.Port.tcp(self.mysql_port))
 
-        openemr_service.connections.allow_from(self.redis_sec_group, ec2.Port.tcp(self.redis_port))
-        openemr_service.connections.allow_to(self.redis_sec_group, ec2.Port.tcp(self.redis_port))
+        openemr_service.connections.allow_from(self.valkey_sec_group, ec2.Port.tcp(self.valkey_port))
+        openemr_service.connections.allow_to(self.valkey_sec_group, ec2.Port.tcp(self.valkey_port))
 
         # Add CPU and memory utilization based autoscaling
         openemr_scalable_target = (
