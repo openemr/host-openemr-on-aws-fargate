@@ -22,6 +22,7 @@
     "openemr_service_fargate_memory_autoscaling_percentage": 40,
     "enable_ecs_exec": "true",
     "activate_openemr_apis": "false",
+    "enable_bedrock_integration": "false",
     "aliases": null,
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
     "@aws-cdk/core:checkSecretUsage": true,

@@ -244,19 +244,34 @@ class OpenemrEcsStack(Stack):
 
         db_credentials = rds.Credentials.from_secret(db_secret)
 
+        parameters = {
+            "server_audit_logs_upload": "1",
+            "log_queries_not_using_indexes": "1",
+            "general_log": "1",
+            "slow_query_log": "1",
+            "server_audit_logging": "1",
+            "server_audit_events": "CONNECT,QUERY,QUERY_DCL,QUERY_DDL,QUERY_DML,TABLE"
+        }
+
+        if self.node.try_get_context("enable_bedrock_integration") == "true":
+            database_ml_role = iam.Role(
+                self,
+                "AuroraMLRole",
+                assumed_by=iam.ServicePrincipal("rds.amazonaws.com"),
+            )
+            database_ml_role.add_to_policy(
+                iam.PolicyStatement(
+                    actions=['bedrock:InvokeModel','bedrock:InvokeModelWithResponseStream'],
+                    resources=['arn:aws:bedrock:*::foundation-model/*']
+                )
+            )
+            parameters["aws_default_bedrock_role"]=database_ml_role.role_arn
+
         parameter_group = rds.ParameterGroup(
             self,
             "ParameterGroup",
             engine=rds.DatabaseClusterEngine.AURORA_MYSQL,
-            parameters={
-                "server_audit_logs_upload": "1",
-                "log_queries_not_using_indexes": "1",
-                "general_log": "1",
-                "slow_query_log": "1",
-                "server_audit_logging":"1",
-                "server_audit_events":"CONNECT,QUERY,QUERY_DCL,QUERY_DDL,QUERY_DML,TABLE"
-
-            }
+            parameters=parameters
         )
 
         self.db_instance = rds.DatabaseCluster(self, "DatabaseCluster",
