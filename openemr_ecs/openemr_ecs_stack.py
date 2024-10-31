@@ -290,6 +290,14 @@ class OpenemrEcsStack(Stack):
                 vpc=self.vpc
                 )
 
+        if self.node.try_get_context("enable_bedrock_integration") == "true":
+            cfn_db_instance = self.db_instance.node.default_child
+            cfn_db_instance.associated_roles = [
+                {
+                "featureName": 'Bedrock',
+                "roleArn": database_ml_role.role_arn,
+                },
+            ]
     def _create_valkey_cluster(self):
         private_subnets_ids = [ps.subnet_id for ps in self.vpc.private_subnets]
 
