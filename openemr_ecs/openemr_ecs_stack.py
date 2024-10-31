@@ -266,6 +266,8 @@ class OpenemrEcsStack(Stack):
                 )
             )
             parameters["aws_default_bedrock_role"]=database_ml_role.role_arn
+            parameters["net_read_timeout"]="172800"
+            parameters["aurora_ml_inference_timeout"]="30000"
 
         parameter_group = rds.ParameterGroup(
             self,
