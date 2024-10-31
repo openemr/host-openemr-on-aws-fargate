@@ -253,6 +253,12 @@ class OpenemrEcsStack(Stack):
             "server_audit_events": "CONNECT,QUERY,QUERY_DCL,QUERY_DDL,QUERY_DML,TABLE"
         }
 
+        parameters["net_read_timeout"] = self.node.try_get_context("net_read_timeout")
+        parameters["net_write_timeout"] = self.node.try_get_context("net_write_timeout")
+        parameters["wait_timeout"] = self.node.try_get_context("wait_timeout")
+        parameters["connect_timeout"] = self.node.try_get_context("connect_timeout")
+        parameters["max_execution_time"] = self.node.try_get_context("max_execution_time")
+
         if self.node.try_get_context("enable_bedrock_integration") == "true":
             database_ml_role = iam.Role(
                 self,
@@ -266,8 +272,8 @@ class OpenemrEcsStack(Stack):
                 )
             )
             parameters["aws_default_bedrock_role"]=database_ml_role.role_arn
-            parameters["net_read_timeout"]="172800"
-            parameters["aurora_ml_inference_timeout"]="30000"
+            parameters["aurora_ml_inference_timeout"]=self.node.try_get_context("aurora_ml_inference_timeout")
+
 
         parameter_group = rds.ParameterGroup(
             self,
@@ -276,24 +282,49 @@ class OpenemrEcsStack(Stack):
             parameters=parameters
         )
 
-        self.db_instance = rds.DatabaseCluster(self, "DatabaseCluster",
-                engine=rds.DatabaseClusterEngine.aurora_mysql(version=rds.AuroraMysqlEngineVersion.VER_3_07_1),
-                cloudwatch_logs_exports=["audit", "error", "general", "slowquery"],
-                writer=rds.ClusterInstance.serverless_v2("writer"),
-                serverless_v2_min_capacity=0.5,
-                serverless_v2_max_capacity=128,
-                storage_encrypted=True,
-                parameter_group=parameter_group,
-                credentials=db_credentials,
-                readers=[rds.ClusterInstance.serverless_v2("reader", scale_with_writer=True)],
-                security_groups=[self.db_sec_group],
-                vpc_subnets=ec2.SubnetSelection(
-                    subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
-                ),
-                vpc=self.vpc
-                )
+        if self.node.try_get_context("enable_data_api") == "true":
+            self.db_instance = rds.DatabaseCluster(self, "DatabaseCluster",
+                    engine=rds.DatabaseClusterEngine.aurora_mysql(version=rds.AuroraMysqlEngineVersion.VER_3_07_1),
+                    cloudwatch_logs_exports=["audit", "error", "general", "slowquery"],
+                    writer=rds.ClusterInstance.serverless_v2("writer"),
+                    enable_data_api=True,
+                    enable_performance_insights=True,
+                    performance_insight_retention=rds.PerformanceInsightRetention.LONG_TERM,
+                    serverless_v2_min_capacity=0.5,
+                    serverless_v2_max_capacity=128,
+                    storage_encrypted=True,
+                    parameter_group=parameter_group,
+                    credentials=db_credentials,
+                    readers=[rds.ClusterInstance.serverless_v2("reader", scale_with_writer=True)],
+                    security_groups=[self.db_sec_group],
+                    vpc_subnets=ec2.SubnetSelection(
+                        subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
+                    ),
+                    vpc=self.vpc
+                    )
+        else:
+            self.db_instance = rds.DatabaseCluster(self, "DatabaseCluster",
+                    engine=rds.DatabaseClusterEngine.aurora_mysql(version=rds.AuroraMysqlEngineVersion.VER_3_07_1),
+                    cloudwatch_logs_exports=["audit", "error", "general", "slowquery"],
+                    writer=rds.ClusterInstance.serverless_v2("writer"),
+                    enable_performance_insights=True,
+                    performance_insight_retention=rds.PerformanceInsightRetention.LONG_TERM,
+                    serverless_v2_min_capacity=0.5,
+                    serverless_v2_max_capacity=128,
+                    storage_encrypted=True,
+                    parameter_group=parameter_group,
+                    credentials=db_credentials,
+                    readers=[rds.ClusterInstance.serverless_v2("reader", scale_with_writer=True)],
+                    security_groups=[self.db_sec_group],
+                    vpc_subnets=ec2.SubnetSelection(
+                        subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
+                    ),
+                    vpc=self.vpc
+                    )
 
         if self.node.try_get_context("enable_bedrock_integration") == "true":
+
+            # Associate role with database cluster
             cfn_db_instance = self.db_instance.node.default_child
             cfn_db_instance.associated_roles = [
                 {
@@ -301,6 +332,33 @@ class OpenemrEcsStack(Stack):
                 "roleArn": database_ml_role.role_arn,
                 },
             ]
+
+            # Create VPC endpoints for bedrock so we can use it from a private subnet
+            bedrock_runtime_interface_endpoint = self.vpc.add_interface_endpoint(
+                "BedrockRuntimeEndpoint",
+                private_dns_enabled=True,
+                service=ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME,
+                subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS)
+            )
+
+            # Allow connections to and from the bedrock endpoints to the database
+            bedrock_runtime_interface_endpoint.connections.allow_default_port_from(self.db_sec_group)
+            bedrock_runtime_interface_endpoint.connections.allow_default_port_to(self.db_sec_group)
+
+            # Allow connections to and from the database to the bedrock endpoints
+            self.db_instance.connections.allow_default_port_from(bedrock_runtime_interface_endpoint)
+            self.db_instance.connections.allow_default_port_to(bedrock_runtime_interface_endpoint)
+
+            # Add policy that allows RDS to access Bedrock VPC endpoint.
+            bedrock_runtime_interface_endpoint.add_to_policy(
+                iam.PolicyStatement(
+                    principals=[database_ml_role],
+                    actions=['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+                    resources=['arn:aws:bedrock:*::foundation-model/*'],
+                    effect=iam.Effect.ALLOW,
+                )
+            )
+
     def _create_valkey_cluster(self):
         private_subnets_ids = [ps.subnet_id for ps in self.vpc.private_subnets]
 
