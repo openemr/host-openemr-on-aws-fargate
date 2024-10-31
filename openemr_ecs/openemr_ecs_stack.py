@@ -270,7 +270,7 @@ class OpenemrEcsStack(Stack):
         parameter_group = rds.ParameterGroup(
             self,
             "ParameterGroup",
-            engine=rds.DatabaseClusterEngine.AURORA_MYSQL,
+            engine=rds.DatabaseClusterEngine.aurora_mysql(version=rds.AuroraMysqlEngineVersion.VER_3_07_1),
             parameters=parameters
         )
 
@@ -281,6 +281,7 @@ class OpenemrEcsStack(Stack):
                 serverless_v2_min_capacity=0.5,
                 serverless_v2_max_capacity=128,
                 storage_encrypted=True,
+                parameter_group=parameter_group,
                 credentials=db_credentials,
                 readers=[rds.ClusterInstance.serverless_v2("reader", scale_with_writer=True)],
                 security_groups=[self.db_sec_group],
