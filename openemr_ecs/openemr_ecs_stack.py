@@ -250,6 +250,7 @@ class OpenemrEcsStack(Stack):
             "general_log": "1",
             "slow_query_log": "1",
             "server_audit_logging": "1",
+            "require_secure_transport": "ON",
             "server_audit_events": "CONNECT,QUERY,QUERY_DCL,QUERY_DDL,QUERY_DML,TABLE"
         }
 
