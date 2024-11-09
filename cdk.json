@@ -16,6 +16,7 @@
   },
   "context": {
     "security_group_ip_range": null,
+    "certificate_arn": null,
     "openemr_service_fargate_minimum_capacity": 2,
     "openemr_service_fargate_maximum_capacity": 100,
     "openemr_service_fargate_cpu_autoscaling_percentage": 40,
@@ -26,7 +27,6 @@
     "enable_data_api": "false",
     "enable_global_accelerator": "false",
     "open_smtp_port": "false",
-    "fqdn_dns_record": null,
     "aurora_ml_inference_timeout": "30000",
     "net_read_timeout": "30000",
     "net_write_timeout": "30000",
