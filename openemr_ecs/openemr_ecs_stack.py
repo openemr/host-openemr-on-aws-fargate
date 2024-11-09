@@ -274,9 +274,16 @@ class OpenemrEcsStack(Stack):
     def _create_route53_a_record(self):
         if self.node.try_get_context("fqdn_dns_record"):
 
-            subdomain, domain, tld = parse_fqdn(self.node.try_get_context("fqdn_dns_record"))
+            # Use urlparse to extract the hostname if it's a URL
+            hostname = urlparse(self.node.try_get_context("fqdn_dns_record")).netloc
+            domain_name = '.'.join(hostname.split('.')[-2:])
+            parts = hostname.split('.')
+            if len(parts) > 2:  # More than 2 parts indicates there might be a subdomain
+                subdomain = '.'.join(parts[:-2])  # Join everything except the last 2 parts (domain and TLD)
+            else:
+                subdomain = None  # No subdomain if there are only 2 parts
 
-            hosted_zone = route53.HostedZone.from_lookup(self, "HostedZone", domain_name=domain)
+            hosted_zone = route53.HostedZone.from_lookup(self, "HostedZone", domain_name=domain_name)
 
             if self.node.try_get_context("enable_global_accelerator") == "true":
                 if subdomain:
@@ -284,13 +291,13 @@ class OpenemrEcsStack(Stack):
                         self, "MyAlbARecord",
                         zone=hosted_zone,
                         record_name=subdomain,
-                        target=RecordTarget.from_alias(route53_targets.GlobalAcceleratorDomainTarget(self.accelerator))
+                        target=route53.RecordTarget.from_alias(route53_targets.GlobalAcceleratorDomainTarget(self.accelerator.dns_name))
                     )
                 else:
                     a_record = route53.ARecord(
                         self, "MyAlbARecord",
                         zone=hosted_zone,
-                        target=RecordTarget.from_alias(route53_targets.GlobalAcceleratorDomainTarget(self.accelerator))
+                        target=route53.RecordTarget.from_alias(route53_targets.GlobalAcceleratorDomainTarget(self.accelerator.dns_name))
                     )
             else:
                 if subdomain:
@@ -298,13 +305,13 @@ class OpenemrEcsStack(Stack):
                         self, "MyAlbARecord",
                         zone=hosted_zone,
                         record_name=subdomain,
-                        target=RecordTarget.from_alias(route53_targets.LoadBalancerTarget(self.alb))
+                        target=route53.RecordTarget.from_alias(route53_targets.LoadBalancerTarget(self.alb))
                     )
                 else:
                     a_record = route53.ARecord(
                         self, "MyAlbARecord",
                         zone=hosted_zone,
-                        target=RecordTarget.from_alias(route53_targets.LoadBalancerTarget(self.alb))
+                        target=route53.RecordTarget.from_alias(route53_targets.LoadBalancerTarget(self.alb))
                     )
 
             CfnOutput(
@@ -979,27 +986,3 @@ class OpenemrEcsStack(Stack):
         )
 
         web_acl.node.add_dependency(self.alb)
-
-
-def parse_fqdn(url_or_fqdn):
-    # Use urlparse to extract the hostname if it's a URL
-    parsed_url = urlparse(url_or_fqdn)
-    hostname = parsed_url.hostname if parsed_url.hostname else url_or_fqdn
-
-    # Split the hostname into parts
-    parts = hostname.split(".")
-
-    if len(parts) >= 3:
-        subdomain = ".".join(parts[:-2])
-        domain = parts[-2]
-        tld = parts[-1]
-    elif len(parts) == 2:
-        subdomain = ""
-        domain = parts[0]
-        tld = parts[1]
-    else:
-        subdomain = ""
-        domain = parts[0]
-        tld = ""
-
-    return subdomain, domain, tld
