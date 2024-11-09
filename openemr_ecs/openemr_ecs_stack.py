@@ -21,8 +21,6 @@ from aws_cdk import (
     aws_events_targets as event_targets,
     aws_globalaccelerator as ga,
     aws_globalaccelerator_endpoints as ga_endpoints,
-    aws_route53 as route53,
-    aws_route53_targets as route53_targets,
     CfnOutput,
     triggers,
     Duration,
@@ -46,7 +44,6 @@ class OpenemrEcsStack(Stack):
         self._create_security_groups()
         self._create_elb_log_bucket()
         self._create_alb()
-        self._create_route53_a_record()
         self._create_waf()
         self._create_environment_variables()
         self._create_password()
@@ -270,55 +267,6 @@ class OpenemrEcsStack(Stack):
                     parameter_name="site_addr_oath",
                     string_value='http://' + self.alb.load_balancer_dns_name
                 )
-
-    def _create_route53_a_record(self):
-        if self.node.try_get_context("fqdn_dns_record"):
-
-            # Use urlparse to extract the hostname if it's a URL
-            hostname = urlparse(self.node.try_get_context("fqdn_dns_record")).netloc
-            domain_name = '.'.join(hostname.split('.')[-2:])
-            parts = hostname.split('.')
-            if len(parts) > 2:  # More than 2 parts indicates there might be a subdomain
-                subdomain = '.'.join(parts[:-2])  # Join everything except the last 2 parts (domain and TLD)
-            else:
-                subdomain = None  # No subdomain if there are only 2 parts
-
-            hosted_zone = route53.HostedZone.from_lookup(self, "HostedZone", domain_name=domain_name)
-
-            if self.node.try_get_context("enable_global_accelerator") == "true":
-                if subdomain:
-                    a_record = route53.ARecord(
-                        self, "MyAlbARecord",
-                        zone=hosted_zone,
-                        record_name=subdomain,
-                        target=route53.RecordTarget.from_alias(route53_targets.GlobalAcceleratorDomainTarget(self.accelerator.dns_name))
-                    )
-                else:
-                    a_record = route53.ARecord(
-                        self, "MyAlbARecord",
-                        zone=hosted_zone,
-                        target=route53.RecordTarget.from_alias(route53_targets.GlobalAcceleratorDomainTarget(self.accelerator.dns_name))
-                    )
-            else:
-                if subdomain:
-                    a_record = route53.ARecord(
-                        self, "MyAlbARecord",
-                        zone=hosted_zone,
-                        record_name=subdomain,
-                        target=route53.RecordTarget.from_alias(route53_targets.LoadBalancerTarget(self.alb))
-                    )
-                else:
-                    a_record = route53.ARecord(
-                        self, "MyAlbARecord",
-                        zone=hosted_zone,
-                        target=route53.RecordTarget.from_alias(route53_targets.LoadBalancerTarget(self.alb))
-                    )
-
-            CfnOutput(
-                self, "Route53ARecord",
-                value=f"{self.node.try_get_context('fqdn_dns_record')}",
-                description="The route53 alias record."
-            )
 
     def _create_db_instance(self):
         db_secret = secretsmanager.Secret(
