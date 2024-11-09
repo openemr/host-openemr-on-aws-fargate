@@ -222,7 +222,7 @@ class OpenemrEcsStack(Stack):
 
             else:
                 # Use HTTP if no certificate is provided
-                ga_listener = self.accelerator.add_listener("GAListener",port_ranges=[ga.PortRange(from_port=80, to_port=80])
+                ga_listener = self.accelerator.add_listener("GAListener",port_ranges=[ga.PortRange(from_port=80, to_port=80)])
 
             ga_listener.add_endpoint_group(
                 "EndpointGroup",
