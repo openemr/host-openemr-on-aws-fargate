@@ -19,12 +19,18 @@ from aws_cdk import (
     aws_certificatemanager as acm,
     aws_events as events,
     aws_events_targets as event_targets,
+    aws_globalaccelerator as ga,
+    aws_globalaccelerator_endpoints as ga_endpoints,
+    aws_route53 as route53,
+    aws_route53_targets as route53_targets,
+    CfnOutput,
     triggers,
     Duration,
     RemovalPolicy,
     ArnFormat
 )
 from constructs import Construct
+from urllib.parse import urlparse
 
 class OpenemrEcsStack(Stack):
 
@@ -40,6 +46,7 @@ class OpenemrEcsStack(Stack):
         self._create_security_groups()
         self._create_elb_log_bucket()
         self._create_alb()
+        self._create_route53_a_record()
         self._create_waf()
         self._create_environment_variables()
         self._create_password()
@@ -202,6 +209,40 @@ class OpenemrEcsStack(Stack):
         )
         self.alb.log_access_logs(self.elb_log_bucket)
 
+        if self.node.try_get_context("enable_global_accelerator") == "true":
+
+            # Create global accelerator
+            self.accelerator = ga.Accelerator(self, "GlobalAccelerator")
+
+            # Add ALB endpoint to global accelerator
+            if self.node.try_get_context("certificate_arn"):
+
+                # Use HTTPS if certificate is provided
+                ga_listener = accelerator.add_listener("GAListener", port_ranges=[ga.PortRange(from_port=443, to_port=443)])
+
+            else:
+                # Use HTTP if no certificate is provided
+                ga_listener = accelerator.add_listener("GAListener",port_ranges=[ga.PortRange(from_port=443, to_port=443)])
+
+            ga_listener.add_endpoint_group(
+                "EndpointGroup",
+                endpoints=[ga_endpoints.ApplicationLoadBalancerEndpoint(self.alb)]
+            )
+
+            # Output the Global Accelerator URL
+            if self.node.try_get_context("certificate_arn"):
+                CfnOutput(
+                    self, "GlobalAcceleratorUrl",
+                    value=f"https://{self.accelerator.dns_name}",
+                    description="The URL for the Global Accelerator"
+                )
+            else:
+                CfnOutput(
+                    self, "GlobalAcceleratorUrl",
+                    value=f"http://{self.accelerator.dns_name}",
+                    description="The URL for the Global Accelerator"
+                )
+
         if self.node.try_get_context("activate_openemr_apis") == "true":
             self.activate_fhir_service = ssm.StringParameter(
                 scope=self,
@@ -229,6 +270,48 @@ class OpenemrEcsStack(Stack):
                     parameter_name="site_addr_oath",
                     string_value='http://' + self.alb.load_balancer_dns_name
                 )
+
+    def _create_route53_a_record(self):
+        if self.node.try_get_context("fqdn_dns_record"):
+
+            subdomain, domain, tld = parse_fqdn(self.node.try_get_context("fqdn_dns_record"))
+
+            hosted_zone = route53.HostedZone.from_lookup(self, "HostedZone", domain_name=domain)
+
+            if self.node.try_get_context("enable_global_accelerator") == "true":
+                if subdomain:
+                    a_record = route53.ARecord(
+                        self, "MyAlbARecord",
+                        zone=hosted_zone,
+                        record_name=subdomain,
+                        target=RecordTarget.from_alias(route53_targets.GlobalAcceleratorDomainTarget(self.accelerator))
+                    )
+                else:
+                    a_record = route53.ARecord(
+                        self, "MyAlbARecord",
+                        zone=hosted_zone,
+                        target=RecordTarget.from_alias(route53_targets.GlobalAcceleratorDomainTarget(self.accelerator))
+                    )
+            else:
+                if subdomain:
+                    a_record = route53.ARecord(
+                        self, "MyAlbARecord",
+                        zone=hosted_zone,
+                        record_name=subdomain,
+                        target=RecordTarget.from_alias(route53_targets.LoadBalancerTarget(self.alb))
+                    )
+                else:
+                    a_record = route53.ARecord(
+                        self, "MyAlbARecord",
+                        zone=hosted_zone,
+                        target=RecordTarget.from_alias(route53_targets.LoadBalancerTarget(self.alb))
+                    )
+
+            CfnOutput(
+                self, "Route53ARecord",
+                value=f"{self.node.try_get_context('fqdn_dns_record')}",
+                description="The route53 alias record."
+            )
 
     def _create_db_instance(self):
         db_secret = secretsmanager.Secret(
@@ -802,12 +885,16 @@ class OpenemrEcsStack(Stack):
         openemr_service.connections.allow_to(self.file_system_for_ssl_folder, ec2.Port.tcp(2049))
         openemr_service.connections.allow_to(self.file_system_for_sites_folder, ec2.Port.tcp(2049))
 
-        # Allow connections to and from our database for our fargate service
+        # Allow connections to and from our database and web caching for our fargate service
         openemr_service.connections.allow_from(self.db_instance, ec2.Port.tcp(self.mysql_port))
         openemr_service.connections.allow_to(self.db_instance, ec2.Port.tcp(self.mysql_port))
 
         openemr_service.connections.allow_from(self.valkey_sec_group, ec2.Port.tcp(self.valkey_port))
         openemr_service.connections.allow_to(self.valkey_sec_group, ec2.Port.tcp(self.valkey_port))
+
+        # Allow outbound traffic to SMTP servers operating on port 587
+        if self.node.try_get_context("open_smtp_port") == "true":
+            openemr_service.connections.allow_to_any_ipv4(ec2.Port.tcp(587))
 
         # Add CPU and memory utilization based autoscaling
         openemr_scalable_target = (
@@ -892,3 +979,27 @@ class OpenemrEcsStack(Stack):
         )
 
         web_acl.node.add_dependency(self.alb)
+
+
+def parse_fqdn(url_or_fqdn):
+    # Use urlparse to extract the hostname if it's a URL
+    parsed_url = urlparse(url_or_fqdn)
+    hostname = parsed_url.hostname if parsed_url.hostname else url_or_fqdn
+
+    # Split the hostname into parts
+    parts = hostname.split(".")
+
+    if len(parts) >= 3:
+        subdomain = ".".join(parts[:-2])
+        domain = parts[-2]
+        tld = parts[-1]
+    elif len(parts) == 2:
+        subdomain = ""
+        domain = parts[0]
+        tld = parts[1]
+    else:
+        subdomain = ""
+        domain = parts[0]
+        tld = ""
+
+    return subdomain, domain, tld
