@@ -218,11 +218,11 @@ class OpenemrEcsStack(Stack):
             if self.node.try_get_context("certificate_arn"):
 
                 # Use HTTPS if certificate is provided
-                ga_listener = accelerator.add_listener("GAListener", port_ranges=[ga.PortRange(from_port=443, to_port=443)])
+                ga_listener = self.accelerator.add_listener("GAListener", port_ranges=[ga.PortRange(from_port=443, to_port=443)])
 
             else:
                 # Use HTTP if no certificate is provided
-                ga_listener = accelerator.add_listener("GAListener",port_ranges=[ga.PortRange(from_port=443, to_port=443)])
+                ga_listener = self.accelerator.add_listener("GAListener",port_ranges=[ga.PortRange(from_port=443, to_port=443)])
 
             ga_listener.add_endpoint_group(
                 "EndpointGroup",
