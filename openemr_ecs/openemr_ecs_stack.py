@@ -19,12 +19,16 @@ from aws_cdk import (
     aws_certificatemanager as acm,
     aws_events as events,
     aws_events_targets as event_targets,
+    aws_globalaccelerator as ga,
+    aws_globalaccelerator_endpoints as ga_endpoints,
+    CfnOutput,
     triggers,
     Duration,
     RemovalPolicy,
     ArnFormat
 )
 from constructs import Construct
+from urllib.parse import urlparse
 
 class OpenemrEcsStack(Stack):
 
@@ -202,6 +206,40 @@ class OpenemrEcsStack(Stack):
         )
         self.alb.log_access_logs(self.elb_log_bucket)
 
+        if self.node.try_get_context("enable_global_accelerator") == "true":
+
+            # Create global accelerator
+            self.accelerator = ga.Accelerator(self, "GlobalAccelerator")
+
+            # Add ALB endpoint to global accelerator
+            if self.node.try_get_context("certificate_arn"):
+
+                # Use HTTPS if certificate is provided
+                ga_listener = self.accelerator.add_listener("GAListener", port_ranges=[ga.PortRange(from_port=443, to_port=443)])
+
+            else:
+                # Use HTTP if no certificate is provided
+                ga_listener = self.accelerator.add_listener("GAListener",port_ranges=[ga.PortRange(from_port=80, to_port=80)])
+
+            ga_listener.add_endpoint_group(
+                "EndpointGroup",
+                endpoints=[ga_endpoints.ApplicationLoadBalancerEndpoint(self.alb)]
+            )
+
+            # Output the Global Accelerator URL
+            if self.node.try_get_context("certificate_arn"):
+                CfnOutput(
+                    self, "GlobalAcceleratorUrl",
+                    value=f"https://{self.accelerator.dns_name}",
+                    description="The URL for the Global Accelerator"
+                )
+            else:
+                CfnOutput(
+                    self, "GlobalAcceleratorUrl",
+                    value=f"http://{self.accelerator.dns_name}",
+                    description="The URL for the Global Accelerator"
+                )
+
         if self.node.try_get_context("activate_openemr_apis") == "true":
             self.activate_fhir_service = ssm.StringParameter(
                 scope=self,
@@ -244,36 +282,121 @@ class OpenemrEcsStack(Stack):
 
         db_credentials = rds.Credentials.from_secret(db_secret)
 
+        parameters = {
+            "server_audit_logs_upload": "1",
+            "log_queries_not_using_indexes": "1",
+            "general_log": "1",
+            "slow_query_log": "1",
+            "server_audit_logging": "1",
+            "require_secure_transport": "ON",
+            "server_audit_events": "CONNECT,QUERY,QUERY_DCL,QUERY_DDL,QUERY_DML,TABLE"
+        }
+
+        parameters["net_read_timeout"] = self.node.try_get_context("net_read_timeout")
+        parameters["net_write_timeout"] = self.node.try_get_context("net_write_timeout")
+        parameters["wait_timeout"] = self.node.try_get_context("wait_timeout")
+        parameters["connect_timeout"] = self.node.try_get_context("connect_timeout")
+        parameters["max_execution_time"] = self.node.try_get_context("max_execution_time")
+
+        if self.node.try_get_context("enable_bedrock_integration") == "true":
+            database_ml_role = iam.Role(
+                self,
+                "AuroraMLRole",
+                assumed_by=iam.ServicePrincipal("rds.amazonaws.com"),
+            )
+            database_ml_role.add_to_policy(
+                iam.PolicyStatement(
+                    actions=['bedrock:InvokeModel','bedrock:InvokeModelWithResponseStream'],
+                    resources=['arn:aws:bedrock:*::foundation-model/*']
+                )
+            )
+            parameters["aws_default_bedrock_role"]=database_ml_role.role_arn
+            parameters["aurora_ml_inference_timeout"]=self.node.try_get_context("aurora_ml_inference_timeout")
+
+
         parameter_group = rds.ParameterGroup(
             self,
             "ParameterGroup",
-            engine=rds.DatabaseClusterEngine.AURORA_MYSQL,
-            parameters={
-                "server_audit_logs_upload": "1",
-                "log_queries_not_using_indexes": "1",
-                "general_log": "1",
-                "slow_query_log": "1",
-                "server_audit_logging":"1",
-                "server_audit_events":"CONNECT,QUERY,QUERY_DCL,QUERY_DDL,QUERY_DML,TABLE"
-
-            }
+            engine=rds.DatabaseClusterEngine.aurora_mysql(version=rds.AuroraMysqlEngineVersion.VER_3_07_1),
+            parameters=parameters
         )
 
-        self.db_instance = rds.DatabaseCluster(self, "DatabaseCluster",
-                engine=rds.DatabaseClusterEngine.aurora_mysql(version=rds.AuroraMysqlEngineVersion.VER_3_07_1),
-                cloudwatch_logs_exports=["audit", "error", "general", "slowquery"],
-                writer=rds.ClusterInstance.serverless_v2("writer"),
-                serverless_v2_min_capacity=0.5,
-                serverless_v2_max_capacity=128,
-                storage_encrypted=True,
-                credentials=db_credentials,
-                readers=[rds.ClusterInstance.serverless_v2("reader", scale_with_writer=True)],
-                security_groups=[self.db_sec_group],
-                vpc_subnets=ec2.SubnetSelection(
-                    subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
-                ),
-                vpc=self.vpc
+        if self.node.try_get_context("enable_data_api") == "true":
+            self.db_instance = rds.DatabaseCluster(self, "DatabaseCluster",
+                    engine=rds.DatabaseClusterEngine.aurora_mysql(version=rds.AuroraMysqlEngineVersion.VER_3_07_1),
+                    cloudwatch_logs_exports=["audit", "error", "general", "slowquery"],
+                    writer=rds.ClusterInstance.serverless_v2("writer"),
+                    enable_data_api=True,
+                    enable_performance_insights=True,
+                    performance_insight_retention=rds.PerformanceInsightRetention.LONG_TERM,
+                    serverless_v2_min_capacity=0.5,
+                    serverless_v2_max_capacity=128,
+                    storage_encrypted=True,
+                    parameter_group=parameter_group,
+                    credentials=db_credentials,
+                    readers=[rds.ClusterInstance.serverless_v2("reader", scale_with_writer=True)],
+                    security_groups=[self.db_sec_group],
+                    vpc_subnets=ec2.SubnetSelection(
+                        subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
+                    ),
+                    vpc=self.vpc
+                    )
+        else:
+            self.db_instance = rds.DatabaseCluster(self, "DatabaseCluster",
+                    engine=rds.DatabaseClusterEngine.aurora_mysql(version=rds.AuroraMysqlEngineVersion.VER_3_07_1),
+                    cloudwatch_logs_exports=["audit", "error", "general", "slowquery"],
+                    writer=rds.ClusterInstance.serverless_v2("writer"),
+                    enable_performance_insights=True,
+                    performance_insight_retention=rds.PerformanceInsightRetention.LONG_TERM,
+                    serverless_v2_min_capacity=0.5,
+                    serverless_v2_max_capacity=128,
+                    storage_encrypted=True,
+                    parameter_group=parameter_group,
+                    credentials=db_credentials,
+                    readers=[rds.ClusterInstance.serverless_v2("reader", scale_with_writer=True)],
+                    security_groups=[self.db_sec_group],
+                    vpc_subnets=ec2.SubnetSelection(
+                        subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
+                    ),
+                    vpc=self.vpc
+                    )
+
+        if self.node.try_get_context("enable_bedrock_integration") == "true":
+
+            # Associate role with database cluster
+            cfn_db_instance = self.db_instance.node.default_child
+            cfn_db_instance.associated_roles = [
+                {
+                "featureName": 'Bedrock',
+                "roleArn": database_ml_role.role_arn,
+                },
+            ]
+
+            # Create VPC endpoints for bedrock so we can use it from a private subnet
+            bedrock_runtime_interface_endpoint = self.vpc.add_interface_endpoint(
+                "BedrockRuntimeEndpoint",
+                private_dns_enabled=True,
+                service=ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME,
+                subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS)
+            )
+
+            # Allow connections to and from the bedrock endpoints to the database
+            bedrock_runtime_interface_endpoint.connections.allow_default_port_from(self.db_sec_group)
+            bedrock_runtime_interface_endpoint.connections.allow_default_port_to(self.db_sec_group)
+
+            # Allow connections to and from the database to the bedrock endpoints
+            self.db_instance.connections.allow_default_port_from(bedrock_runtime_interface_endpoint)
+            self.db_instance.connections.allow_default_port_to(bedrock_runtime_interface_endpoint)
+
+            # Add policy that allows RDS to access Bedrock VPC endpoint.
+            bedrock_runtime_interface_endpoint.add_to_policy(
+                iam.PolicyStatement(
+                    principals=[database_ml_role],
+                    actions=['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+                    resources=['arn:aws:bedrock:*::foundation-model/*'],
+                    effect=iam.Effect.ALLOW,
                 )
+            )
 
     def _create_valkey_cluster(self):
         private_subnets_ids = [ps.subnet_id for ps in self.vpc.private_subnets]
@@ -717,12 +840,16 @@ class OpenemrEcsStack(Stack):
         openemr_service.connections.allow_to(self.file_system_for_ssl_folder, ec2.Port.tcp(2049))
         openemr_service.connections.allow_to(self.file_system_for_sites_folder, ec2.Port.tcp(2049))
 
-        # Allow connections to and from our database for our fargate service
+        # Allow connections to and from our database and web caching for our fargate service
         openemr_service.connections.allow_from(self.db_instance, ec2.Port.tcp(self.mysql_port))
         openemr_service.connections.allow_to(self.db_instance, ec2.Port.tcp(self.mysql_port))
 
         openemr_service.connections.allow_from(self.valkey_sec_group, ec2.Port.tcp(self.valkey_port))
         openemr_service.connections.allow_to(self.valkey_sec_group, ec2.Port.tcp(self.valkey_port))
+
+        # Allow outbound traffic to SMTP servers operating on port 587
+        if self.node.try_get_context("open_smtp_port") == "true":
+            openemr_service.connections.allow_to_any_ipv4(ec2.Port.tcp(587))
 
         # Add CPU and memory utilization based autoscaling
         openemr_scalable_target = (
