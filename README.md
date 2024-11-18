@@ -246,6 +246,14 @@ If `route53_domain` is set to the domain of a public hosted zone in the same AWS
 
 if `route53_domain` is set and `configure_ses` is set to "true" then the architecture will automatically configure SES for you and encode functioning SMTP credentials that can be used to send email into your OpenEMR installation. The email address will be notifications@services.${route53_domain} (i.e. notifications@services.emr-testing.com). To test that your SMTP setup is properly functioning there's an awesome testemail.php script from Sherwin Gaddis (if you're reading this thanks Sherwin!) that you [can read more about and download for free here](https://community.open-emr.org/t/how-do-i-actually-send-an-email-to-my-client-from-within-openemr/20647/9).
 
+Note: if you configure SES you will need to activate your SMTP credentials in the OpenEMR console. Log in as the admin user and then click on "Config" in the "Admin" tab followed by "Notifications" in the sidebar followed by the "Save" button. No need to change any of the default values; they'll be set for you.
+
+![alt text](./docs/activating_email_credentials.png)
+
+Once you get your SMTP credentials functioning and you follow the instructions linked to above for setting up testemail.php you should be able to navigate to https://openemr.${domain_name}/interface/testemail.php and see something like this.
+
+![alt text](./docs/testemail.php_output.png)
+
 if `route53_domain` is set and `configure_ses` is set to "true" and `email_forwarding_address` is changed from null to an external email address you'd like to forward email to (i.e. target-email@example.com) the architecture will set up an email that you can use to forward email to that address. The email address will be help@${route53.domain} (i.e. help@emr-testing.com) and emailing it will archive the message in an encrypted S3 bucket and forward a copy to the external email specified.
 
 Using these services will incur extra costs. See here for pricing information on [route53](https://aws.amazon.com/route53/pricing/), [AWS Certificate Manager](https://aws.amazon.com/certificate-manager/pricing/), and [AWS SES](https://aws.amazon.com/ses/pricing/). 
