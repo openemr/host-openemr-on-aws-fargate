@@ -12,6 +12,7 @@
 - [Cost](#cost)
 - [Load Testing](#load-testing)
 - [Customizing Architecture Attributes](#customizing-architecture-attributes)
+- [Automating DNS Setup](#automating-dns-setup)
 - [Enabling HTTPS for Client to Load Balancer Communication](#enabling-https-for-client-to-load-balancer-communication)
 - [How AWS Backup is Used in this Architecture](#how-aws-backup-is-used-in-this-architecture)
 - [Using ECS Exec](#using-ecs-exec)
@@ -214,7 +215,7 @@ There are some additional parameters you can set in `cdk.json` that you can use 
  * `enable_bedrock_integration`          Setting this value to `"true"` will enable the integration to [Aurora ML for Bedrock for MySQL](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/mysql-ml.html#using-amazon-bedrock). Some inspiration for what to use this integration for can be found [here](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/mysql-ml.html#using-amazon-bedrock). More information about this integration can be found in the [Aurora ML for AWS Bedrock](#aurora-ml-for-aws-bedrock) section of this documentation. Defaults to "false".
  * `enable_data_api`          Setting this value to `"true"` will enable the [RDS Data API](https://docs.aws.amazon.com/rdsdataservice/latest/APIReference/Welcome.html) for our databases cluster. More information on the RDS Data API integration with our architecture can be found in the [RDS Data API](#rds-data_api) section of this documentation. Defaults to "false".
  * `open_smtp_port`          Setting this value to `"true"` will open up port 587 for outbound traffic from the ECS service. Defaults to "false".
- * `enable_global_accelerator`  Setting this value to `"true"` will create an [AWS global accelerator](https://aws.amazon.com/global-accelerator/) endpoint that you can use to more optimally route traffic over Amazon's edge network and deliver increased performance (especially to users who made be located far away from the region in which this architecture is created). More information on the AWS Global Accelerator integration with our architecture can be found in the [Using AWS Global Accelerator](#using-aws-global-accelerator) section of this documentation. Defaults to "false".
+ * `enable_patient_portal`          Setting this value to `"true"` will enable the OpenEMR patient portal at ${your_installation_url}/portal. Defaults to "false".
 
 MySQL specific parameters:
 
@@ -224,6 +225,28 @@ MySQL specific parameters:
  * `wait_timeout`          Defaults to "30000" seconds. Documentation can be found [here](https://dev.mysql.com/doc/refman/8.4/en/server-system-variables.html#sysvar_wait_timeout).
  * `connect_timeout`          Defaults to "30000" seconds. Documentation can be found [here](https://dev.mysql.com/doc/refman/8.4/en/server-system-variables.html#sysvar_connect_timeout).
  * `max_execution_time`          Defaults to "3000000" milliseconds. Documentation can be found [here](https://dev.mysql.com/doc/refman/8.4/en/server-system-variables.html#sysvar_max_execution_time).
+
+DNS specific parameters:
+
+The following parameters can be set to automate DNS management and email/SMTP setup.
+
+ * `route53_domain`
+ * `configure_ses`
+ * `email_forwarding_address`
+
+For documentation on how these parameters can be used see the [Automating DNS Setup](#automating-dns-setup) section of this guide.
+
+# Automating DNS Setup
+
+If you want to get started as quickly as possible I'd recommend purchasing a route53 domain by following [these instructions](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/domain-register.html#domain-register-procedure-section).
+
+If `route53_domain` is set to the domain of a public hosted zone in the same AWS account the architecture will automate the setup and maintenance of SSL materials. A certificate with auto-renewal enabled will be generated for HTTPS and an alias record accessible from a web browser will be created at https://openemr.${domain_name} (i.e. https://openemr.emr-testing.com).
+
+if `route53_domain` is set and `configure_ses` is set to "true" then the architecture will automatically configure SES for you and encode functioning SMTP credentials that can be used to send email into your OpenEMR installation. The email address will be notifications@services.${route53_domain} (i.e. notifications@services.emr-testing.com). To test that your SMTP setup is properly functioning there's an awesome testemail.php script from Sherwin Gaddis (if you're reading this thanks Sherwin!) that you [can read more about and download for free here](https://community.open-emr.org/t/how-do-i-actually-send-an-email-to-my-client-from-within-openemr/20647/9).
+
+if `route53_domain` is set and `configure_ses` is set to "true" and `email_forwarding_address` is changed from null to an external email address you'd like to forward email to (i.e. target-email@example.com) the architecture will set up an email that you can use to forward email to that address. The email address will be help@${route53.domain} (i.e. help@emr-testing.com) and emailing it will archive the message in an encrypted S3 bucket and forward a copy to the external email specified.
+
+Using these services will incur extra costs. See here for pricing information on [route53](https://aws.amazon.com/route53/pricing/), [AWS Certificate Manager](https://aws.amazon.com/certificate-manager/pricing/), and [AWS SES](https://aws.amazon.com/ses/pricing/). 
 
 # Enabling HTTPS for Client to Load Balancer Communication
 
