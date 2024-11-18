@@ -458,6 +458,16 @@ class OpenemrEcsStack(Stack):
                 domain_name=ses_domain_identity.dkim_dns_token_value3
             )
 
+            # Set up DMARC; for documentation see here
+            # (https://docs.aws.amazon.com/ses/latest/dg/send-email-authentication-dmarc.html).
+            dmarc_record = route53.TxtRecord(
+                self,
+                "DmarcRecord",
+                zone=hosted_zone,
+                record_name="_dmarc",
+                values=["v=DMARC1;p=quarantine;rua=mailto:help@"+self.node.try_get_context("route53_domain")]
+            )
+
             # Create IAM user for SES SMTP access
             ses_smtp_user = iam.User(self, "SmtpUser", user_name="ses-smtp-user")
 
