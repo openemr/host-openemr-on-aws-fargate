@@ -15,12 +15,16 @@ from aws_cdk import (
     aws_ssm as ssm,
     aws_wafv2 as wafv2,
     aws_lambda as _lambda,
+    aws_ses as ses,
+    aws_ses_actions as ses_actions,
     aws_secretsmanager as secretsmanager,
     aws_certificatemanager as acm,
     aws_events as events,
     aws_events_targets as event_targets,
     aws_globalaccelerator as ga,
     aws_globalaccelerator_endpoints as ga_endpoints,
+    aws_route53 as route53,
+    aws_route53_targets as targets,
     CfnOutput,
     triggers,
     Duration,
@@ -28,7 +32,7 @@ from aws_cdk import (
     ArnFormat
 )
 from constructs import Construct
-from urllib.parse import urlparse
+
 
 class OpenemrEcsStack(Stack):
 
@@ -44,6 +48,8 @@ class OpenemrEcsStack(Stack):
         self._create_security_groups()
         self._create_elb_log_bucket()
         self._create_alb()
+        self._create_and_configure_dns_and_certificates()
+        self._configure_ses()
         self._create_waf()
         self._create_environment_variables()
         self._create_password()
@@ -93,7 +99,6 @@ class OpenemrEcsStack(Stack):
             log_destination_type='cloud-watch-logs',
             log_group_name=vpc_log_group.log_group_name
         )
-
 
     def _create_elb_log_bucket(self):
         self.elb_log_bucket = s3.Bucket(
@@ -172,7 +177,7 @@ class OpenemrEcsStack(Stack):
             vpc=self.vpc,
             allow_all_outbound=False
         )
-        if self.node.try_get_context("certificate_arn"):
+        if self.node.try_get_context("certificate_arn") or self.node.try_get_context("route53_domain"):
             cidr = self.node.try_get_context("security_group_ip_range")
             if cidr:
                 self.lb_sec_group.add_ingress_rule(
@@ -212,14 +217,16 @@ class OpenemrEcsStack(Stack):
             self.accelerator = ga.Accelerator(self, "GlobalAccelerator")
 
             # Add ALB endpoint to global accelerator
-            if self.node.try_get_context("certificate_arn"):
+            if self.node.try_get_context("certificate_arn") or self.node.try_get_context("route53_domain"):
 
                 # Use HTTPS if certificate is provided
-                ga_listener = self.accelerator.add_listener("GAListener", port_ranges=[ga.PortRange(from_port=443, to_port=443)])
+                ga_listener = self.accelerator.add_listener("GAListener",
+                                                            port_ranges=[ga.PortRange(from_port=443, to_port=443)])
 
             else:
                 # Use HTTP if no certificate is provided
-                ga_listener = self.accelerator.add_listener("GAListener",port_ranges=[ga.PortRange(from_port=80, to_port=80)])
+                ga_listener = self.accelerator.add_listener("GAListener",
+                                                            port_ranges=[ga.PortRange(from_port=80, to_port=80)])
 
             ga_listener.add_endpoint_group(
                 "EndpointGroup",
@@ -227,7 +234,7 @@ class OpenemrEcsStack(Stack):
             )
 
             # Output the Global Accelerator URL
-            if self.node.try_get_context("certificate_arn"):
+            if self.node.try_get_context("certificate_arn") or self.node.try_get_context("route53_domain"):
                 CfnOutput(
                     self, "GlobalAcceleratorUrl",
                     value=f"https://{self.accelerator.dns_name}",
@@ -253,19 +260,423 @@ class OpenemrEcsStack(Stack):
                 parameter_name="activate_rest_api",
                 string_value="1"
             )
-            if self.node.try_get_context("certificate_arn"):
-                self.site_addr_oath = ssm.StringParameter(
-                    scope=self,
-                    id="site-addr-oath",
-                    parameter_name="site_addr_oath",
-                    string_value='https://' + self.alb.load_balancer_dns_name
+
+        if self.node.try_get_context("enable_patient_portal") == "true":
+
+            # Construct Patient Portal Address Parameter
+
+            if self.node.try_get_context("route53_domain"):
+                if self.node.try_get_context("certificate_arn") or self.node.try_get_context("route53_domain"):
+                    self.portal_onsite_two_address = ssm.StringParameter(
+                        scope=self,
+                        id="portal-onsite-two-address",
+                        parameter_name="portal_onsite_two_address",
+                        string_value='https://openemr.' + self.node.try_get_context("route53_domain") + '/portal/'
+                    )
+                else:
+                    self.portal_onsite_two_address = ssm.StringParameter(
+                        scope=self,
+                        id="portal-onsite-two-address",
+                        parameter_name="portal_onsite_two_address",
+                        string_value='http://openemr.' + self.node.try_get_context("route53_domain") + '/portal/'
+                    )
+            else:
+                # Value of DNS name will change based on whether it's using a global accelerator endpoint
+                if self.node.try_get_context("enable_global_accelerator") == "true":
+                    if self.node.try_get_context("certificate_arn") or self.node.try_get_context("route53_domain"):
+                        self.portal_onsite_two_address = ssm.StringParameter(
+                            scope=self,
+                            id="portal-onsite-two-address",
+                            parameter_name="portal_onsite_two_address",
+                            string_value='https://' + self.accelerator.dns_name + '/portal/',
+                        )
+                    else:
+                        self.portal_onsite_two_address = ssm.StringParameter(
+                            scope=self,
+                            id="portal-onsite-two-address",
+                            parameter_name="portal_onsite_two_address",
+                            string_value='http://' + self.accelerator.dns_name + '/portal/'
+                        )
+                else:
+                    if self.node.try_get_context("certificate_arn") or self.node.try_get_context("route53_domain"):
+                        self.portal_onsite_two_address = ssm.StringParameter(
+                            scope=self,
+                            id="portal-onsite-two-address",
+                            parameter_name="portal_onsite_two_address",
+                            string_value='https://' + self.alb.dns_name + '/portal/'
+                        )
+                    else:
+                        self.portal_onsite_two_address = ssm.StringParameter(
+                            scope=self,
+                            id="portal-onsite-two-address",
+                            parameter_name="portal_onsite_two_address",
+                            string_value='https://' + self.alb.dns_name + '/portal/'
+                        )
+
+            # Other parameters
+            self.portal_onsite_two_enable = ssm.StringParameter(
+                scope=self,
+                id="portal-onsite-two-enable",
+                parameter_name="portal_onsite_two_enable",
+                string_value="1"
+            )
+            self.ccda_alt_service_enable = ssm.StringParameter(
+                scope=self,
+                id="ccda-alt-service-enable",
+                parameter_name="ccda_alt_service_enable",
+                string_value="3"
+            )
+            self.rest_portal_api = ssm.StringParameter(
+                scope=self,
+                id="rest-portal-api",
+                parameter_name="rest_portal_api",
+                string_value="1"
+            )
+
+        # must set site-addr-oath if using the OpenEMR APIs or enabling the patient portal.
+        if self.node.try_get_context("activate_openemr_apis") == "true" or self.node.try_get_context(
+                "enable_patient_portal") == "true":
+            if self.node.try_get_context("route53_domain"):
+                if self.node.try_get_context("certificate_arn") or self.node.try_get_context("route53_domain"):
+                    self.site_addr_oath = ssm.StringParameter(
+                        scope=self,
+                        id="site-addr-oath",
+                        parameter_name="site_addr_oath",
+                        string_value='https://openemr.' + self.node.try_get_context("route53_domain")
+                    )
+                else:
+                    self.site_addr_oath = ssm.StringParameter(
+                        scope=self,
+                        id="site-addr-oath",
+                        parameter_name="site_addr_oath",
+                        string_value='http://openemr.' + self.node.try_get_context("route53_domain")
+                    )
+            else:
+                # Value of DNS name will change based on whether it's using a global accelerator endpoint
+                if self.node.try_get_context("enable_global_accelerator") == "true":
+                    if self.node.try_get_context("certificate_arn") or self.node.try_get_context("route53_domain"):
+                        self.site_addr_oath = ssm.StringParameter(
+                            scope=self,
+                            id="site-addr-oath",
+                            parameter_name="site_addr_oath",
+                            string_value='https://' + self.accelerator.dns_name
+                        )
+                    else:
+                        self.site_addr_oath = ssm.StringParameter(
+                            scope=self,
+                            id="site-addr-oath",
+                            parameter_name="site_addr_oath",
+                            string_value='http://' + self.accelerator.dns_name
+                        )
+                else:
+                    if self.node.try_get_context("certificate_arn") or self.node.try_get_context("route53_domain"):
+                        self.site_addr_oath = ssm.StringParameter(
+                            scope=self,
+                            id="site-addr-oath",
+                            parameter_name="site_addr_oath",
+                            string_value='https://' + self.alb.load_balancer_dns_name
+                        )
+                    else:
+                        self.site_addr_oath = ssm.StringParameter(
+                            scope=self,
+                            id="site-addr-oath",
+                            parameter_name="site_addr_oath",
+                            string_value='http://' + self.alb.load_balancer_dns_name
+                        )
+
+    def _create_and_configure_dns_and_certificates(self):
+
+        if self.node.try_get_context("route53_domain"):
+
+            # Define the hosted zone in Route 53
+            hosted_zone = route53.HostedZone.from_lookup(
+                self, "HostedZoneForRoute53",
+                domain_name=self.node.try_get_context("route53_domain")
+            )
+
+            self.certificate = acm.Certificate(
+                self, "Certificate",
+                domain_name="*." + self.node.try_get_context("route53_domain"),
+                validation=acm.CertificateValidation.from_dns(hosted_zone)
+            )
+
+            if self.node.try_get_context("enable_global_accelerator") == "true":
+                # Create a Route 53 alias record pointing to the ALB
+                route53.ARecord(
+                    self, "AliasRecordOpenEMR",
+                    zone=hosted_zone,
+                    target=route53.RecordTarget.from_alias(
+                        targets.GlobalAcceleratorDomainTarget(self.accelerator.dns_name)),
+                    record_name="openemr"
                 )
             else:
-                self.site_addr_oath = ssm.StringParameter(
+                # Create a Route 53 alias record pointing to the Global Accelerator
+                route53.ARecord(
+                    self, "AliasRecordOpenEMR",
+                    zone=hosted_zone,
+                    target=route53.RecordTarget.from_alias(targets.LoadBalancerTarget(self.alb)),
+                    record_name="openemr"
+                )
+
+    def _configure_ses(self):
+
+        if self.node.try_get_context("route53_domain") and self.node.try_get_context("configure_ses") == 'true':
+            # Define the hosted zone in Route 53
+            hosted_zone = route53.HostedZone.from_lookup(
+                self, "HostedZoneForSES",
+                domain_name=self.node.try_get_context("route53_domain")
+            )
+
+            # Create an SES domain identity for email verification
+            ses_domain_identity = ses.EmailIdentity(self,
+                                                    "SESIdentity",
+                                                    identity=ses.Identity.public_hosted_zone(hosted_zone),
+                                                    mail_from_domain="services." + self.node.try_get_context(
+                                                        "route53_domain")
+                                                    )
+
+            # Create 3 CNAME Records Necessary to Verify Domain Identity
+            dkim_cname_record_1 = route53.CnameRecord(
+                self,
+                "DkimCnameRecord1",
+                zone=hosted_zone,
+                record_name=ses_domain_identity.dkim_dns_token_name1,
+                domain_name=ses_domain_identity.dkim_dns_token_value1
+            )
+            dkim_cname_record_2 = route53.CnameRecord(
+                self,
+                "DkimCnameRecord2",
+                zone=hosted_zone,
+                record_name=ses_domain_identity.dkim_dns_token_name2,
+                domain_name=ses_domain_identity.dkim_dns_token_value2
+            )
+            dkim_cname_record_3 = route53.CnameRecord(
+                self,
+                "DkimCnameRecord3",
+                zone=hosted_zone,
+                record_name=ses_domain_identity.dkim_dns_token_name3,
+                domain_name=ses_domain_identity.dkim_dns_token_value3
+            )
+
+            # Set up DMARC; for documentation see here
+            # (https://docs.aws.amazon.com/ses/latest/dg/send-email-authentication-dmarc.html).
+            dmarc_record = route53.TxtRecord(
+                self,
+                "DmarcRecord",
+                zone=hosted_zone,
+                record_name="_dmarc",
+                values=["v=DMARC1;p=quarantine;rua=mailto:help@"+self.node.try_get_context("route53_domain")]
+            )
+
+            # Create IAM user for SES SMTP access
+            ses_smtp_user = iam.User(self, "SmtpUser", user_name="ses-smtp-user")
+
+            # Attach the required SES SMTP policy to the IAM user
+            ses_domain_identity.grant_send_email(ses_smtp_user)
+
+            # Generate SMTP credentials for the SES SMTP user
+            access_key = iam.AccessKey(self, "SmtpAccessKey", user=ses_smtp_user)
+
+            # Create secret to store SMTP password and store secret access key in another secret for processing.
+            self.smtp_password = secretsmanager.Secret(
+                self,
+                "smtp-secret"
+            )
+            self.secret_access_key = secretsmanager.Secret(
+                self,
+                "secret-access-key",
+                secret_object_value={
+                    "password":  access_key.secret_access_key
+                }
+            )
+            # Create a function and run it once so our SMTP parameter is properly set
+            self.one_time_generate_smtp_credential_lambda = triggers.TriggerFunction(self, "SMTPSetup",
+                                                                                 runtime=_lambda.Runtime.PYTHON_3_12,
+                                                                                 code=_lambda.Code.from_asset('lambda'),
+                                                                                 architecture=_lambda.Architecture.ARM_64,
+                                                                                 handler='lambda_functions.generate_smtp_credential',
+                                                                                 timeout=Duration.minutes(10)
+                                                                                 )
+
+            # Grant appropriate IAM permissions
+            self.secret_access_key.grant_read(self.one_time_generate_smtp_credential_lambda.role)
+            self.smtp_password.grant_write(self.one_time_generate_smtp_credential_lambda.role)
+
+            # Add environment variable
+            self.one_time_generate_smtp_credential_lambda.add_environment('SECRET_ACCESS_KEY', self.secret_access_key.secret_arn)
+            self.one_time_generate_smtp_credential_lambda.add_environment('SMTP_PASSWORD', self.smtp_password.secret_arn)
+
+            # Store SMTP User, Host, Port, and other values SSM Parameters
+            self.smtp_user = ssm.StringParameter(
+                scope=self,
+                id="smtp-user",
+                parameter_name="smtp_user",
+                string_value=access_key.access_key_id
+            )
+            self.smtp_host = ssm.StringParameter(
+                scope=self,
+                id="smtp-host",
+                parameter_name="smtp_host",
+                string_value="email-smtp." + self.region + ".amazonaws.com"
+            )
+            self.smtp_port = ssm.StringParameter(
+                scope=self,
+                id="smtp-port",
+                parameter_name="smtp_port",
+                string_value="587"
+            )
+            self.smtp_secure = ssm.StringParameter(
+                scope=self,
+                id="smtp-secure",
+                parameter_name="smtp_secure",
+                string_value="tls"
+            )
+            self.patient_reminder_sender_email = ssm.StringParameter(
+                scope=self,
+                id="patient-reminder-sender-email",
+                parameter_name="patient_reminder_sender_email",
+                string_value="notifications@" + "services." + self.node.try_get_context("route53_domain")
+            )
+            self.patient_reminder_sender_name = ssm.StringParameter(
+                scope=self,
+                id="patient-reminder-sender-name",
+                parameter_name="patient_reminder_sender_name",
+                string_value="OpenEMR"
+            )
+
+            # Create VPC endpoint for sending SMTP email with SES
+            self.smtp_interface_endpoint = self.vpc.add_interface_endpoint(
+                "smtp_vpc_interface_endpoint",
+                private_dns_enabled=True,
+                service=ec2.InterfaceVpcEndpointAwsService.EMAIL_SMTP,
+                subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS)
+            )
+
+            # Setup for Email Forwarding if Forwarding Email is Specified
+            if self.node.try_get_context("email_forwarding_address"):
+
+                # Validate Email Receiving Domain
+                record_set = route53.MxRecord(self,
+                                              "MxReceivingRecord",
+                                              values=[route53.MxRecordValue(
+                                                  host_name="inbound-smtp."+self.region+".amazonaws.com",
+                                                  priority=10
+                                              )],
+                                              zone=hosted_zone,
+                                              record_name=self.node.try_get_context("route53_domain"),
+                                              )
+
+                # Pass the KMS key in the `encryptionKey` field to associate the key to the S3 bucket
+                self.email_storage_bucket = s3.Bucket(self, "EmailStorageBucket",
+                                             auto_delete_objects=True,
+                                             removal_policy=RemovalPolicy.DESTROY,
+                                             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+                                             enforce_ssl=True,
+                                             versioned=True
+                                             )
+
+                # Create the policy statement allowing access for SES to the S3 bucket.
+                ses_write_policy = iam.PolicyStatement(
+                    effect=iam.Effect.ALLOW,
+                    principals=[iam.ServicePrincipal("ses.amazonaws.com")],
+                    actions=[
+                        "s3:PutObject",
+                        "s3:PutObjectAcl"
+                    ],
+                    resources=[
+                        f"{self.email_storage_bucket.bucket_arn}/*"  # Allow access to all objects in bucket
+                    ]
+                )
+
+                # Add the policy to the bucket
+                self.email_storage_bucket.add_to_resource_policy(ses_write_policy)
+
+                # Create an IAM policy that grants SES permissions to write to S3
+                ses_policy = iam.PolicyStatement(
+                    actions=["s3:PutObject","s3:PutObjectAcl"],
+                    resources=[f"{self.email_storage_bucket.bucket_arn}/*"],
+                    effect=iam.Effect.ALLOW
+                )
+
+                # Create a role for SES to assume when accessing the S3 bucket
+                ses_role = iam.Role(self, "SesRole", assumed_by=iam.ServicePrincipal("ses.amazonaws.com"))
+
+                # Add the SES policy to the SES role
+                ses_role.add_to_policy(ses_policy)
+
+                # Grant SES the permissions to write to the S3 bucket
+                self.email_storage_bucket.grant_write(ses_role)
+
+                # Create a Lambda function to process and forward emails
+                self.email_forwarding_lambda = _lambda.Function(
+                    self,
+                    "EmailForwardingLambda",
+                    runtime=_lambda.Runtime.PYTHON_3_12,
+                    code=_lambda.Code.from_asset('lambda'),
+                    architecture=_lambda.Architecture.ARM_64,
+                    handler='lambda_functions.send_email',
+                    environment={
+                        "FORWARD_TO": self.node.try_get_context("email_forwarding_address"),
+                        "SOURCE_ARN": ses_domain_identity.email_identity_arn,
+                        "SOURCE_NAME": "help@" + self.node.try_get_context("route53_domain"),
+                        "BUCKET_NAME": self.email_storage_bucket.bucket_name
+                    }
+                )
+
+                # Grant the Lambda function permissions to read from the S3 bucket
+                self.email_storage_bucket.grant_read(self.email_forwarding_lambda)
+
+                # Grant the Lambda function SES email sending permissions
+                ses_domain_identity.grant_send_email(self.email_forwarding_lambda)
+
+                # Set up an SES Rule Set
+                rule_set = ses.ReceiptRuleSet(self, "RuleSet")
+
+                # Add a rule to the rule set
+                rule_set.add_rule(
+                    "ForwardingRule",
+                    recipients=["help@" + self.node.try_get_context("route53_domain")],
+                    enabled=True,
+                    scan_enabled=True,
+                    tls_policy=ses.TlsPolicy.REQUIRE,
+                    actions=[
+                        ses_actions.S3(
+                            bucket=self.email_storage_bucket
+                        ),
+                        ses_actions.Lambda(
+                            function=self.email_forwarding_lambda
+                        ),
+                    ]
+                )
+
+                # Create a function and run it once so our rule set for receiving is active
+                self.set_rule_set_to_active = triggers.TriggerFunction(
+                    self,
+                    "MakeRuleSetActive",
+                     runtime=_lambda.Runtime.PYTHON_3_12,
+                     code=_lambda.Code.from_asset('lambda'),
+                     architecture=_lambda.Architecture.ARM_64,
+                     handler='lambda_functions.make_ruleset_active',
+                     timeout=Duration.minutes(10),
+                    environment={
+                        "RULE_SET_NAME": rule_set.receipt_rule_set_name
+                    }
+                 )
+
+                # Create IAM policy statement to allow lambda to make ruleset active and add it to the function
+                policy_statement = iam.PolicyStatement(
+                    effect=iam.Effect.ALLOW,
+                    actions=["ses:SetActiveReceiptRuleSet"],
+                    resources=["*"]
+                )
+                self.set_rule_set_to_active.add_to_role_policy(policy_statement)
+
+                # Set up practice return email parameter
+                self.practice_return_email_path = ssm.StringParameter(
                     scope=self,
-                    id="site-addr-oath",
-                    parameter_name="site_addr_oath",
-                    string_value='http://' + self.alb.load_balancer_dns_name
+                    id="practice-return-email-path",
+                    parameter_name="practice_return_email_path",
+                    string_value="help@" + self.node.try_get_context("route53_domain")
                 )
 
     def _create_db_instance(self):
@@ -306,13 +717,12 @@ class OpenemrEcsStack(Stack):
             )
             database_ml_role.add_to_policy(
                 iam.PolicyStatement(
-                    actions=['bedrock:InvokeModel','bedrock:InvokeModelWithResponseStream'],
+                    actions=['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
                     resources=['arn:aws:bedrock:*::foundation-model/*']
                 )
             )
-            parameters["aws_default_bedrock_role"]=database_ml_role.role_arn
-            parameters["aurora_ml_inference_timeout"]=self.node.try_get_context("aurora_ml_inference_timeout")
-
+            parameters["aws_default_bedrock_role"] = database_ml_role.role_arn
+            parameters["aurora_ml_inference_timeout"] = self.node.try_get_context("aurora_ml_inference_timeout")
 
         parameter_group = rds.ParameterGroup(
             self,
@@ -323,52 +733,55 @@ class OpenemrEcsStack(Stack):
 
         if self.node.try_get_context("enable_data_api") == "true":
             self.db_instance = rds.DatabaseCluster(self, "DatabaseCluster",
-                    engine=rds.DatabaseClusterEngine.aurora_mysql(version=rds.AuroraMysqlEngineVersion.VER_3_07_1),
-                    cloudwatch_logs_exports=["audit", "error", "general", "slowquery"],
-                    writer=rds.ClusterInstance.serverless_v2("writer"),
-                    enable_data_api=True,
-                    enable_performance_insights=True,
-                    performance_insight_retention=rds.PerformanceInsightRetention.LONG_TERM,
-                    serverless_v2_min_capacity=0.5,
-                    serverless_v2_max_capacity=128,
-                    storage_encrypted=True,
-                    parameter_group=parameter_group,
-                    credentials=db_credentials,
-                    readers=[rds.ClusterInstance.serverless_v2("reader", scale_with_writer=True)],
-                    security_groups=[self.db_sec_group],
-                    vpc_subnets=ec2.SubnetSelection(
-                        subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
-                    ),
-                    vpc=self.vpc
-                    )
+                                                   engine=rds.DatabaseClusterEngine.aurora_mysql(
+                                                       version=rds.AuroraMysqlEngineVersion.VER_3_07_1),
+                                                   cloudwatch_logs_exports=["audit", "error", "general", "slowquery"],
+                                                   writer=rds.ClusterInstance.serverless_v2("writer"),
+                                                   enable_data_api=True,
+                                                   enable_performance_insights=True,
+                                                   performance_insight_retention=rds.PerformanceInsightRetention.LONG_TERM,
+                                                   serverless_v2_min_capacity=0.5,
+                                                   serverless_v2_max_capacity=128,
+                                                   storage_encrypted=True,
+                                                   parameter_group=parameter_group,
+                                                   credentials=db_credentials,
+                                                   readers=[rds.ClusterInstance.serverless_v2("reader",
+                                                                                              scale_with_writer=True)],
+                                                   security_groups=[self.db_sec_group],
+                                                   vpc_subnets=ec2.SubnetSelection(
+                                                       subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
+                                                   ),
+                                                   vpc=self.vpc
+                                                   )
         else:
             self.db_instance = rds.DatabaseCluster(self, "DatabaseCluster",
-                    engine=rds.DatabaseClusterEngine.aurora_mysql(version=rds.AuroraMysqlEngineVersion.VER_3_07_1),
-                    cloudwatch_logs_exports=["audit", "error", "general", "slowquery"],
-                    writer=rds.ClusterInstance.serverless_v2("writer"),
-                    enable_performance_insights=True,
-                    performance_insight_retention=rds.PerformanceInsightRetention.LONG_TERM,
-                    serverless_v2_min_capacity=0.5,
-                    serverless_v2_max_capacity=128,
-                    storage_encrypted=True,
-                    parameter_group=parameter_group,
-                    credentials=db_credentials,
-                    readers=[rds.ClusterInstance.serverless_v2("reader", scale_with_writer=True)],
-                    security_groups=[self.db_sec_group],
-                    vpc_subnets=ec2.SubnetSelection(
-                        subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
-                    ),
-                    vpc=self.vpc
-                    )
+                                                   engine=rds.DatabaseClusterEngine.aurora_mysql(
+                                                       version=rds.AuroraMysqlEngineVersion.VER_3_07_1),
+                                                   cloudwatch_logs_exports=["audit", "error", "general", "slowquery"],
+                                                   writer=rds.ClusterInstance.serverless_v2("writer"),
+                                                   enable_performance_insights=True,
+                                                   performance_insight_retention=rds.PerformanceInsightRetention.LONG_TERM,
+                                                   serverless_v2_min_capacity=0.5,
+                                                   serverless_v2_max_capacity=128,
+                                                   storage_encrypted=True,
+                                                   parameter_group=parameter_group,
+                                                   credentials=db_credentials,
+                                                   readers=[rds.ClusterInstance.serverless_v2("reader",
+                                                                                              scale_with_writer=True)],
+                                                   security_groups=[self.db_sec_group],
+                                                   vpc_subnets=ec2.SubnetSelection(
+                                                       subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
+                                                   ),
+                                                   vpc=self.vpc
+                                                   )
 
         if self.node.try_get_context("enable_bedrock_integration") == "true":
-
             # Associate role with database cluster
             cfn_db_instance = self.db_instance.node.default_child
             cfn_db_instance.associated_roles = [
                 {
-                "featureName": 'Bedrock',
-                "roleArn": database_ml_role.role_arn,
+                    "featureName": 'Bedrock',
+                    "roleArn": database_ml_role.role_arn,
                 },
             ]
 
@@ -428,51 +841,51 @@ class OpenemrEcsStack(Stack):
         if self.node.try_get_context("enable_ecs_exec") == "true":
 
             # Create a key and give cloudwatch logs and s3 permissions to use it
-            self.kms_key = kms.Key(self, "KmsKey",enable_key_rotation=True)
-            self.kms_key.grant_encrypt_decrypt(iam.ServicePrincipal("logs."+self.region+".amazonaws.com"))
+            self.kms_key = kms.Key(self, "KmsKey", enable_key_rotation=True)
+            self.kms_key.grant_encrypt_decrypt(iam.ServicePrincipal("logs." + self.region + ".amazonaws.com"))
             self.kms_key.grant_encrypt_decrypt(iam.ServicePrincipal("s3.amazonaws.com"))
 
             # Pass the KMS key in the `encryptionKey` field to associate the key to the log group
             self.ecs_exec_group = logs.LogGroup(self, "LogGroup",
-                                      encryption_key=self.kms_key
-                                      )
+                                                encryption_key=self.kms_key
+                                                )
 
             # Pass the KMS key in the `encryptionKey` field to associate the key to the S3 bucket
             self.exec_bucket = s3.Bucket(self, "EcsExecBucket",
-                                    auto_delete_objects=True,
-                                    removal_policy=RemovalPolicy.DESTROY,
-                                    block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
-                                    encryption_key=self.kms_key,
-                                    enforce_ssl=True,
-                                    versioned=True
-                                    )
+                                         auto_delete_objects=True,
+                                         removal_policy=RemovalPolicy.DESTROY,
+                                         block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+                                         encryption_key=self.kms_key,
+                                         enforce_ssl=True,
+                                         versioned=True
+                                         )
 
             # Create cluster
             self.ecs_cluster = ecs.Cluster(self, "ecs-cluster",
-                                  vpc=self.vpc,
-                                  container_insights=True,
-                                  enable_fargate_capacity_providers=True,
-                                  execute_command_configuration=ecs.ExecuteCommandConfiguration(
-                                      kms_key=self.kms_key,
-                                      log_configuration=ecs.ExecuteCommandLogConfiguration(
-                                          cloud_watch_log_group=self.ecs_exec_group,
-                                          cloud_watch_encryption_enabled=True,
-                                          s3_bucket=self.exec_bucket,
-                                          s3_encryption_enabled=True,
-                                          s3_key_prefix="exec-command-output"
-                                      ),
-                                      logging=ecs.ExecuteCommandLogging.OVERRIDE,
-                                  )
-                                  )
+                                           vpc=self.vpc,
+                                           container_insights=True,
+                                           enable_fargate_capacity_providers=True,
+                                           execute_command_configuration=ecs.ExecuteCommandConfiguration(
+                                               kms_key=self.kms_key,
+                                               log_configuration=ecs.ExecuteCommandLogConfiguration(
+                                                   cloud_watch_log_group=self.ecs_exec_group,
+                                                   cloud_watch_encryption_enabled=True,
+                                                   s3_bucket=self.exec_bucket,
+                                                   s3_encryption_enabled=True,
+                                                   s3_key_prefix="exec-command-output"
+                                               ),
+                                               logging=ecs.ExecuteCommandLogging.OVERRIDE,
+                                           )
+                                           )
 
         else:
 
             # Create cluster
             self.ecs_cluster = ecs.Cluster(self, "ecs-cluster",
-                                  vpc=self.vpc,
-                                  container_insights=True,
-                                  enable_fargate_capacity_providers=True
-                                  )
+                                           vpc=self.vpc,
+                                           container_insights=True,
+                                           enable_fargate_capacity_providers=True
+                                           )
 
         # Add dependency so cluster is not created before the database
         self.ecs_cluster.node.add_dependency(self.db_instance)
@@ -548,14 +961,18 @@ class OpenemrEcsStack(Stack):
 
         # Add container definition for a container with OpenSSL to the original task
         ssl_maintenance_container = create_ssl_materials_task.add_container("AmazonLinuxContainer",
-            logging=ecs.LogDriver.aws_logs(stream_prefix="ecs/sslmaintenance", log_group=self.log_group,),
-            port_mappings=[ecs.PortMapping(container_port=self.container_port)],
-            essential=True,
-            container_name="openemr",
-            entry_point=["/bin/sh", "-c"],
-            command=command_array,
-            image=ecs.ContainerImage.from_registry("openemr/openemr:7.0.2")
-        )
+                                                                            logging=ecs.LogDriver.aws_logs(
+                                                                                stream_prefix="ecs/sslmaintenance",
+                                                                                log_group=self.log_group, ),
+                                                                            port_mappings=[ecs.PortMapping(
+                                                                                container_port=self.container_port)],
+                                                                            essential=True,
+                                                                            container_name="openemr",
+                                                                            entry_point=["/bin/sh", "-c"],
+                                                                            command=command_array,
+                                                                            image=ecs.ContainerImage.from_registry(
+                                                                                "openemr/openemr:7.0.2")
+                                                                            )
 
         # Create mount point for EFS for ssl folder
         efs_mount_point_for_ssl_folder = ecs.MountPoint(
@@ -589,7 +1006,7 @@ class OpenemrEcsStack(Stack):
             runtime=_lambda.Runtime.PYTHON_3_12,
             code=_lambda.Code.from_asset('lambda'),
             architecture=_lambda.Architecture.ARM_64,
-            handler='maintain_ssl_materials.handler',
+            handler='lambda_functions.generate_ssl_materials',
             timeout=Duration.minutes(10)
         )
 
@@ -606,10 +1023,10 @@ class OpenemrEcsStack(Stack):
         create_ssl_materials_lambda.add_to_role_policy(policy_statement)
 
         # Add environment variables
-        create_ssl_materials_lambda.add_environment('ECS_CLUSTER',self.ecs_cluster.cluster_arn)
-        create_ssl_materials_lambda.add_environment('TASK_DEFINITION',create_ssl_materials_task.task_definition_arn)
-        create_ssl_materials_lambda.add_environment('SUBNETS',private_subnet_id_string)
-        create_ssl_materials_lambda.add_environment('SECURITY_GROUPS',security_group_id)
+        create_ssl_materials_lambda.add_environment('ECS_CLUSTER', self.ecs_cluster.cluster_arn)
+        create_ssl_materials_lambda.add_environment('TASK_DEFINITION', create_ssl_materials_task.task_definition_arn)
+        create_ssl_materials_lambda.add_environment('SUBNETS', private_subnet_id_string)
+        create_ssl_materials_lambda.add_environment('SECURITY_GROUPS', security_group_id)
 
         # Add schedule so function runs on regular interval
         rule_to_run_on_regular_interval = events.Rule(
@@ -620,35 +1037,33 @@ class OpenemrEcsStack(Stack):
         )
 
         # Create a function and run it once so that SSL is set up before the OpenEMR containers start
-        self.one_time_create_ssl_materials_lambda = triggers.TriggerFunction(self, "MyTrigger",
-                                 runtime=_lambda.Runtime.PYTHON_3_12,
-                                 code=_lambda.Code.from_asset('lambda'),
-                                 architecture=_lambda.Architecture.ARM_64,
-                                 handler='maintain_ssl_materials.handler',
-                                 timeout=Duration.minutes(10)
-                                 )
+        self.one_time_create_ssl_materials_lambda = triggers.TriggerFunction(self, "OneTimeSSLSetup",
+                                                                             runtime=_lambda.Runtime.PYTHON_3_12,
+                                                                             code=_lambda.Code.from_asset('lambda'),
+                                                                             architecture=_lambda.Architecture.ARM_64,
+                                                                             handler='lambda_functions.generate_ssl_materials',
+                                                                             timeout=Duration.minutes(10)
+                                                                             )
 
         # Add permissions to task role
         create_ssl_materials_task.grant_run(self.one_time_create_ssl_materials_lambda.grant_principal)
         self.one_time_create_ssl_materials_lambda.add_to_role_policy(policy_statement)
 
         # Add environment variables
-        self.one_time_create_ssl_materials_lambda.add_environment('ECS_CLUSTER',self.ecs_cluster.cluster_arn)
+        self.one_time_create_ssl_materials_lambda.add_environment('ECS_CLUSTER', self.ecs_cluster.cluster_arn)
         self.one_time_create_ssl_materials_lambda.add_environment('TASK_DEFINITION',create_ssl_materials_task.task_definition_arn)
-        self.one_time_create_ssl_materials_lambda.add_environment('SUBNETS',private_subnet_id_string)
-        self.one_time_create_ssl_materials_lambda.add_environment('SECURITY_GROUPS',security_group_id)
+        self.one_time_create_ssl_materials_lambda.add_environment('SUBNETS', private_subnet_id_string)
+        self.one_time_create_ssl_materials_lambda.add_environment('SECURITY_GROUPS', security_group_id)
 
     def _create_openemr_service(self):
 
         # Test for user supplied certificate
         if self.node.try_get_context("certificate_arn"):
-            self.user_provided_certificate = acm.Certificate.from_certificate_arn(
-                                                        self,
-                                                        "domainCert",
-                                                        self.node.try_get_context("certificate_arn")
+            self.certificate = acm.Certificate.from_certificate_arn(
+                self,
+                "domainCert",
+                self.node.try_get_context("certificate_arn")
             )
-        else:
-            self.user_provided_certificate = None
 
         # Create OpenEMR task definition
         openemr_fargate_task_definition = ecs.FargateTaskDefinition(
@@ -698,28 +1113,61 @@ class OpenemrEcsStack(Stack):
             "REDIS_TLS": ecs.Secret.from_ssm_parameter(self.php_valkey_tls_variable),
             "SWARM_MODE": ecs.Secret.from_ssm_parameter(self.swarm_mode),
         }
+
+        if self.node.try_get_context("activate_openemr_apis") == "true" or self.node.try_get_context(
+                "enable_patient_portal") == "true":
+            secrets["OPENEMR_SETTING_site_addr_oath"] = ecs.Secret.from_ssm_parameter(self.site_addr_oath)
+
         if self.node.try_get_context("activate_openemr_apis") == "true":
             secrets["OPENEMR_SETTING_rest_api"] = ecs.Secret.from_ssm_parameter(self.activate_rest_api)
             secrets["OPENEMR_SETTING_rest_fhir_api"] = ecs.Secret.from_ssm_parameter(self.activate_fhir_service)
-            secrets["OPENEMR_SETTING_site_addr_oath"] = ecs.Secret.from_ssm_parameter(self.site_addr_oath)
+
+        if self.node.try_get_context("enable_patient_portal") == "true":
+            secrets["OPENEMR_SETTING_portal_onsite_two_address"] = ecs.Secret.from_ssm_parameter(
+                self.portal_onsite_two_address)
+            secrets["OPENEMR_SETTING_portal_onsite_two_enable"] = ecs.Secret.from_ssm_parameter(
+                self.portal_onsite_two_enable)
+            secrets["OPENEMR_SETTING_ccda_alt_service_enable"] = ecs.Secret.from_ssm_parameter(
+                self.ccda_alt_service_enable)
+            secrets["OPENEMR_SETTING_rest_portal_api"] = ecs.Secret.from_ssm_parameter(self.rest_portal_api)
+
+        if self.node.try_get_context("configure_ses") == "true":
+            secrets["OPENEMR_SETTING_SMTP_PASS"] = ecs.Secret.from_secrets_manager(self.smtp_password, "password")
+            secrets["OPENEMR_SETTING_SMTP_USER"] = ecs.Secret.from_ssm_parameter(self.smtp_user)
+            secrets["OPENEMR_SETTING_SMTP_HOST"] = ecs.Secret.from_ssm_parameter(self.smtp_host)
+            secrets["OPENEMR_SETTING_SMTP_PORT"] = ecs.Secret.from_ssm_parameter(self.smtp_port)
+            secrets["OPENEMR_SETTING_SMTP_SECURE"] = ecs.Secret.from_ssm_parameter(self.smtp_secure)
+            secrets["OPENEMR_SETTING_patient_reminder_sender_email"] = ecs.Secret.from_ssm_parameter(
+                self.patient_reminder_sender_email)
+            secrets["OPENEMR_SETTING_patient_reminder_sender_name"] = ecs.Secret.from_ssm_parameter(
+                self.patient_reminder_sender_name)
+
+            if self.node.try_get_context("email_forwarding_address"):
+                secrets["OPENEMR_SETTING_practice_return_email_path"] = ecs.Secret.from_ssm_parameter(
+                    self.practice_return_email_path)
 
         # Add OpenEMR container definition to original task
         openemr_container = openemr_fargate_task_definition.add_container("OpenEMRContainer",
-            logging=ecs.LogDriver.aws_logs(stream_prefix="ecs/openemr", log_group=self.log_group),
-            port_mappings=[ecs.PortMapping(container_port=self.container_port)],
-            essential=True,
-            container_name="openemr",
-            working_directory='/var/www/localhost/htdocs/openemr',
-            entry_point=["/bin/sh", "-c"],
-            command=command_array,
-            health_check=ecs.HealthCheck(
-             command=["CMD-SHELL","curl -f http://localhost:80/swagger || exit 1"],
-             start_period=Duration.seconds(300),
-             interval=Duration.seconds(120)
-            ),
-            image=ecs.ContainerImage.from_registry("openemr/openemr:7.0.2"),
-            secrets=secrets
-        )
+                                                                          logging=ecs.LogDriver.aws_logs(
+                                                                              stream_prefix="ecs/openemr",
+                                                                              log_group=self.log_group),
+                                                                          port_mappings=[ecs.PortMapping(
+                                                                              container_port=self.container_port)],
+                                                                          essential=True,
+                                                                          container_name="openemr",
+                                                                          working_directory='/var/www/localhost/htdocs/openemr',
+                                                                          entry_point=["/bin/sh", "-c"],
+                                                                          command=command_array,
+                                                                          health_check=ecs.HealthCheck(
+                                                                              command=["CMD-SHELL",
+                                                                                       "curl -f http://localhost:80/swagger || exit 1"],
+                                                                              start_period=Duration.seconds(300),
+                                                                              interval=Duration.seconds(120)
+                                                                          ),
+                                                                          image=ecs.ContainerImage.from_registry(
+                                                                              "openemr/openemr:7.0.2"),
+                                                                          secrets=secrets
+                                                                          )
 
         # Create mount point for EFS for sites folder
         efs_mount_point_for_sites_folder = ecs.MountPoint(
@@ -741,11 +1189,12 @@ class OpenemrEcsStack(Stack):
             efs_mount_point_for_ssl_folder
         )
 
-        #Create proxy service with load balancer
-        if self.user_provided_certificate:
+        # Create proxy service with load balancer
+        if self.node.try_get_context("certificate_arn") or self.node.try_get_context("route53_domain"):
             openemr_application_load_balanced_fargate_service = ecs_patterns.ApplicationLoadBalancedFargateService(
                 self, "OpenEMRFargateLBService",
-                certificate=self.user_provided_certificate,
+                certificate=self.certificate,
+                min_healthy_percent=100,
                 cluster=self.ecs_cluster,
                 desired_count=self.node.try_get_context("openemr_service_fargate_minimum_capacity"),
                 load_balancer=self.alb,
@@ -756,6 +1205,7 @@ class OpenemrEcsStack(Stack):
         else:
             openemr_application_load_balanced_fargate_service = ecs_patterns.ApplicationLoadBalancedFargateService(
                 self, "OpenEMRFargateLBService",
+                min_healthy_percent=100,
                 cluster=self.ecs_cluster,
                 desired_count=self.node.try_get_context("openemr_service_fargate_minimum_capacity"),
                 load_balancer=self.alb,
@@ -851,6 +1301,14 @@ class OpenemrEcsStack(Stack):
         if self.node.try_get_context("open_smtp_port") == "true":
             openemr_service.connections.allow_to_any_ipv4(ec2.Port.tcp(587))
 
+        # Allow communication to the SES interface endpoint if SES is configured
+        if self.node.try_get_context("configure_ses") == "true":
+            openemr_service.connections.allow_to_any_ipv4(ec2.Port.tcp(587))
+            self.smtp_interface_endpoint.connections.allow_from(openemr_service, ec2.Port.tcp(587))
+            self.smtp_interface_endpoint.connections.allow_to(openemr_service, ec2.Port.tcp(587))
+            openemr_service.connections.allow_from(self.smtp_interface_endpoint, ec2.Port.tcp(587))
+            openemr_service.connections.allow_to(self.smtp_interface_endpoint, ec2.Port.tcp(587))
+
         # Add CPU and memory utilization based autoscaling
         openemr_scalable_target = (
             openemr_service.auto_scale_task_count(
@@ -860,13 +1318,14 @@ class OpenemrEcsStack(Stack):
         )
 
         openemr_scalable_target.scale_on_cpu_utilization(
-         "OpenEMRCPUScaling",
-         target_utilization_percent=self.node.try_get_context("openemr_service_fargate_cpu_autoscaling_percentage")
+            "OpenEMRCPUScaling",
+            target_utilization_percent=self.node.try_get_context("openemr_service_fargate_cpu_autoscaling_percentage")
         )
 
         openemr_scalable_target.scale_on_memory_utilization(
-         "OpenEMRMemoryScaling",
-         target_utilization_percent=self.node.try_get_context("openemr_service_fargate_memory_autoscaling_percentage")
+            "OpenEMRMemoryScaling",
+            target_utilization_percent=self.node.try_get_context(
+                "openemr_service_fargate_memory_autoscaling_percentage")
         )
 
     def _create_waf(self):
