@@ -552,60 +552,63 @@ class OpenemrEcsStack(Stack):
                 subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS)
             )
 
-            # Setup for Email Forwarding if Forwarding Email is Specified
+
+            # Validate Email Receiving Domain
+            record_set = route53.MxRecord(self,
+                                          "MxReceivingRecord",
+                                          values=[route53.MxRecordValue(
+                                              host_name="inbound-smtp."+self.region+".amazonaws.com",
+                                              priority=10
+                                          )],
+                                          zone=hosted_zone,
+                                          record_name=self.node.try_get_context("route53_domain"),
+                                          )
+
+            # Pass the KMS key in the `encryptionKey` field to associate the key to the S3 bucket
+            self.email_storage_bucket = s3.Bucket(self, "EmailStorageBucket",
+                                         auto_delete_objects=True,
+                                         removal_policy=RemovalPolicy.DESTROY,
+                                         block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+                                         enforce_ssl=True,
+                                         versioned=True
+                                         )
+
+            # Create the policy statement allowing access for SES to the S3 bucket.
+            ses_write_policy = iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                principals=[iam.ServicePrincipal("ses.amazonaws.com")],
+                actions=[
+                    "s3:PutObject",
+                    "s3:PutObjectAcl"
+                ],
+                resources=[
+                    f"{self.email_storage_bucket.bucket_arn}/*"  # Allow access to all objects in bucket
+                ]
+            )
+
+            # Add the policy to the bucket
+            self.email_storage_bucket.add_to_resource_policy(ses_write_policy)
+
+            # Create an IAM policy that grants SES permissions to write to S3
+            ses_policy = iam.PolicyStatement(
+                actions=["s3:PutObject","s3:PutObjectAcl"],
+                resources=[f"{self.email_storage_bucket.bucket_arn}/*"],
+                effect=iam.Effect.ALLOW
+            )
+
+            # Create a role for SES to assume when accessing the S3 bucket
+            ses_role = iam.Role(self, "SesRole", assumed_by=iam.ServicePrincipal("ses.amazonaws.com"))
+
+            # Add the SES policy to the SES role
+            ses_role.add_to_policy(ses_policy)
+
+            # Grant SES the permissions to write to the S3 bucket
+            self.email_storage_bucket.grant_write(ses_role)
+
+            # Set up an SES Rule Set
+            rule_set = ses.ReceiptRuleSet(self, "RuleSet")
+
             if self.node.try_get_context("email_forwarding_address"):
-
-                # Validate Email Receiving Domain
-                record_set = route53.MxRecord(self,
-                                              "MxReceivingRecord",
-                                              values=[route53.MxRecordValue(
-                                                  host_name="inbound-smtp."+self.region+".amazonaws.com",
-                                                  priority=10
-                                              )],
-                                              zone=hosted_zone,
-                                              record_name=self.node.try_get_context("route53_domain"),
-                                              )
-
-                # Pass the KMS key in the `encryptionKey` field to associate the key to the S3 bucket
-                self.email_storage_bucket = s3.Bucket(self, "EmailStorageBucket",
-                                             auto_delete_objects=True,
-                                             removal_policy=RemovalPolicy.DESTROY,
-                                             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
-                                             enforce_ssl=True,
-                                             versioned=True
-                                             )
-
-                # Create the policy statement allowing access for SES to the S3 bucket.
-                ses_write_policy = iam.PolicyStatement(
-                    effect=iam.Effect.ALLOW,
-                    principals=[iam.ServicePrincipal("ses.amazonaws.com")],
-                    actions=[
-                        "s3:PutObject",
-                        "s3:PutObjectAcl"
-                    ],
-                    resources=[
-                        f"{self.email_storage_bucket.bucket_arn}/*"  # Allow access to all objects in bucket
-                    ]
-                )
-
-                # Add the policy to the bucket
-                self.email_storage_bucket.add_to_resource_policy(ses_write_policy)
-
-                # Create an IAM policy that grants SES permissions to write to S3
-                ses_policy = iam.PolicyStatement(
-                    actions=["s3:PutObject","s3:PutObjectAcl"],
-                    resources=[f"{self.email_storage_bucket.bucket_arn}/*"],
-                    effect=iam.Effect.ALLOW
-                )
-
-                # Create a role for SES to assume when accessing the S3 bucket
-                ses_role = iam.Role(self, "SesRole", assumed_by=iam.ServicePrincipal("ses.amazonaws.com"))
-
-                # Add the SES policy to the SES role
-                ses_role.add_to_policy(ses_policy)
-
-                # Grant SES the permissions to write to the S3 bucket
-                self.email_storage_bucket.grant_write(ses_role)
 
                 # Create a Lambda function to process and forward emails
                 self.email_forwarding_lambda = _lambda.Function(
@@ -629,9 +632,6 @@ class OpenemrEcsStack(Stack):
                 # Grant the Lambda function SES email sending permissions
                 ses_domain_identity.grant_send_email(self.email_forwarding_lambda)
 
-                # Set up an SES Rule Set
-                rule_set = ses.ReceiptRuleSet(self, "RuleSet")
-
                 # Add a rule to the rule set
                 rule_set.add_rule(
                     "ForwardingRule",
@@ -648,36 +648,50 @@ class OpenemrEcsStack(Stack):
                         ),
                     ]
                 )
-
-                # Create a function and run it once so our rule set for receiving is active
-                self.set_rule_set_to_active = triggers.TriggerFunction(
-                    self,
-                    "MakeRuleSetActive",
-                     runtime=_lambda.Runtime.PYTHON_3_12,
-                     code=_lambda.Code.from_asset('lambda'),
-                     architecture=_lambda.Architecture.ARM_64,
-                     handler='lambda_functions.make_ruleset_active',
-                     timeout=Duration.minutes(10),
-                    environment={
-                        "RULE_SET_NAME": rule_set.receipt_rule_set_name
-                    }
-                 )
-
-                # Create IAM policy statement to allow lambda to make ruleset active and add it to the function
-                policy_statement = iam.PolicyStatement(
-                    effect=iam.Effect.ALLOW,
-                    actions=["ses:SetActiveReceiptRuleSet"],
-                    resources=["*"]
+            else:
+                # Add a rule to the rule set
+                rule_set.add_rule(
+                    "ForwardingRule",
+                    recipients=["help@" + self.node.try_get_context("route53_domain")],
+                    enabled=True,
+                    scan_enabled=True,
+                    tls_policy=ses.TlsPolicy.REQUIRE,
+                    actions=[
+                        ses_actions.S3(
+                            bucket=self.email_storage_bucket
+                        )
+                    ]
                 )
-                self.set_rule_set_to_active.add_to_role_policy(policy_statement)
 
-                # Set up practice return email parameter
-                self.practice_return_email_path = ssm.StringParameter(
-                    scope=self,
-                    id="practice-return-email-path",
-                    parameter_name="practice_return_email_path",
-                    string_value="help@" + self.node.try_get_context("route53_domain")
-                )
+            # Create a function and run it once so our rule set for receiving is active
+            self.set_rule_set_to_active = triggers.TriggerFunction(
+                self,
+                "MakeRuleSetActive",
+                 runtime=_lambda.Runtime.PYTHON_3_12,
+                 code=_lambda.Code.from_asset('lambda'),
+                 architecture=_lambda.Architecture.ARM_64,
+                 handler='lambda_functions.make_ruleset_active',
+                 timeout=Duration.minutes(10),
+                environment={
+                    "RULE_SET_NAME": rule_set.receipt_rule_set_name
+                }
+             )
+
+            # Create IAM policy statement to allow lambda to make ruleset active and add it to the function
+            policy_statement = iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=["ses:SetActiveReceiptRuleSet"],
+                resources=["*"]
+            )
+            self.set_rule_set_to_active.add_to_role_policy(policy_statement)
+
+            # Set up practice return email parameter
+            self.practice_return_email_path = ssm.StringParameter(
+                scope=self,
+                id="practice-return-email-path",
+                parameter_name="practice_return_email_path",
+                string_value="help@" + self.node.try_get_context("route53_domain")
+            )
 
     def _create_db_instance(self):
         db_secret = secretsmanager.Secret(
@@ -727,21 +741,21 @@ class OpenemrEcsStack(Stack):
         parameter_group = rds.ParameterGroup(
             self,
             "ParameterGroup",
-            engine=rds.DatabaseClusterEngine.aurora_mysql(version=rds.AuroraMysqlEngineVersion.VER_3_07_1),
+            engine=rds.DatabaseClusterEngine.aurora_mysql(version=rds.AuroraMysqlEngineVersion.VER_3_08_0),
             parameters=parameters
         )
 
         if self.node.try_get_context("enable_data_api") == "true":
             self.db_instance = rds.DatabaseCluster(self, "DatabaseCluster",
                                                    engine=rds.DatabaseClusterEngine.aurora_mysql(
-                                                       version=rds.AuroraMysqlEngineVersion.VER_3_07_1),
+                                                       version=rds.AuroraMysqlEngineVersion.VER_3_08_0),
                                                    cloudwatch_logs_exports=["audit", "error", "general", "slowquery"],
                                                    writer=rds.ClusterInstance.serverless_v2("writer"),
                                                    enable_data_api=True,
                                                    enable_performance_insights=True,
                                                    performance_insight_retention=rds.PerformanceInsightRetention.LONG_TERM,
                                                    serverless_v2_min_capacity=0.5,
-                                                   serverless_v2_max_capacity=128,
+                                                   serverless_v2_max_capacity=256,
                                                    storage_encrypted=True,
                                                    parameter_group=parameter_group,
                                                    credentials=db_credentials,
@@ -753,16 +767,18 @@ class OpenemrEcsStack(Stack):
                                                    ),
                                                    vpc=self.vpc
                                                    )
+            # Will remove when CDK support is added.
+            self.db_instance.node.default_child.add_property_override('ServerlessV2ScalingConfiguration.MinCapacity', 0)
         else:
             self.db_instance = rds.DatabaseCluster(self, "DatabaseCluster",
                                                    engine=rds.DatabaseClusterEngine.aurora_mysql(
-                                                       version=rds.AuroraMysqlEngineVersion.VER_3_07_1),
+                                                       version=rds.AuroraMysqlEngineVersion.VER_3_08_0),
                                                    cloudwatch_logs_exports=["audit", "error", "general", "slowquery"],
                                                    writer=rds.ClusterInstance.serverless_v2("writer"),
                                                    enable_performance_insights=True,
                                                    performance_insight_retention=rds.PerformanceInsightRetention.LONG_TERM,
                                                    serverless_v2_min_capacity=0.5,
-                                                   serverless_v2_max_capacity=128,
+                                                   serverless_v2_max_capacity=256,
                                                    storage_encrypted=True,
                                                    parameter_group=parameter_group,
                                                    credentials=db_credentials,
@@ -774,6 +790,8 @@ class OpenemrEcsStack(Stack):
                                                    ),
                                                    vpc=self.vpc
                                                    )
+            # Will remove when CDK support is added.
+            self.db_instance.node.default_child.add_property_override('ServerlessV2ScalingConfiguration.MinCapacity', 0)
 
         if self.node.try_get_context("enable_bedrock_integration") == "true":
             # Associate role with database cluster
