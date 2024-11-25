@@ -491,7 +491,7 @@ class OpenemrEcsStack(Stack):
             )
             # Create a function and run it once so our SMTP parameter is properly set
             self.one_time_generate_smtp_credential_lambda = triggers.TriggerFunction(self, "SMTPSetup",
-                                                                                 runtime=_lambda.Runtime.PYTHON_3_12,
+                                                                                 runtime=_lambda.Runtime.PYTHON_3_13,
                                                                                  code=_lambda.Code.from_asset('lambda'),
                                                                                  architecture=_lambda.Architecture.ARM_64,
                                                                                  handler='lambda_functions.generate_smtp_credential',
@@ -614,7 +614,7 @@ class OpenemrEcsStack(Stack):
                 self.email_forwarding_lambda = _lambda.Function(
                     self,
                     "EmailForwardingLambda",
-                    runtime=_lambda.Runtime.PYTHON_3_12,
+                    runtime=_lambda.Runtime.PYTHON_3_13,
                     code=_lambda.Code.from_asset('lambda'),
                     architecture=_lambda.Architecture.ARM_64,
                     handler='lambda_functions.send_email',
@@ -667,7 +667,7 @@ class OpenemrEcsStack(Stack):
             self.set_rule_set_to_active = triggers.TriggerFunction(
                 self,
                 "MakeRuleSetActive",
-                 runtime=_lambda.Runtime.PYTHON_3_12,
+                 runtime=_lambda.Runtime.PYTHON_3_13,
                  code=_lambda.Code.from_asset('lambda'),
                  architecture=_lambda.Architecture.ARM_64,
                  handler='lambda_functions.make_ruleset_active',
@@ -754,7 +754,7 @@ class OpenemrEcsStack(Stack):
                                                    enable_data_api=True,
                                                    enable_performance_insights=True,
                                                    performance_insight_retention=rds.PerformanceInsightRetention.LONG_TERM,
-                                                   serverless_v2_min_capacity=0.5,
+                                                   serverless_v2_min_capacity=0,
                                                    serverless_v2_max_capacity=256,
                                                    storage_encrypted=True,
                                                    parameter_group=parameter_group,
@@ -767,8 +767,6 @@ class OpenemrEcsStack(Stack):
                                                    ),
                                                    vpc=self.vpc
                                                    )
-            # Will remove when CDK support is added.
-            self.db_instance.node.default_child.add_property_override('ServerlessV2ScalingConfiguration.MinCapacity', 0)
         else:
             self.db_instance = rds.DatabaseCluster(self, "DatabaseCluster",
                                                    engine=rds.DatabaseClusterEngine.aurora_mysql(
@@ -777,7 +775,7 @@ class OpenemrEcsStack(Stack):
                                                    writer=rds.ClusterInstance.serverless_v2("writer"),
                                                    enable_performance_insights=True,
                                                    performance_insight_retention=rds.PerformanceInsightRetention.LONG_TERM,
-                                                   serverless_v2_min_capacity=0.5,
+                                                   serverless_v2_min_capacity=0,
                                                    serverless_v2_max_capacity=256,
                                                    storage_encrypted=True,
                                                    parameter_group=parameter_group,
@@ -790,8 +788,6 @@ class OpenemrEcsStack(Stack):
                                                    ),
                                                    vpc=self.vpc
                                                    )
-            # Will remove when CDK support is added.
-            self.db_instance.node.default_child.add_property_override('ServerlessV2ScalingConfiguration.MinCapacity', 0)
 
         if self.node.try_get_context("enable_bedrock_integration") == "true":
             # Associate role with database cluster
@@ -1021,7 +1017,7 @@ class OpenemrEcsStack(Stack):
         # Create generate SSL materials Lambda
         create_ssl_materials_lambda = _lambda.Function(
             self, 'MaintainSSLMaterialsLambda',
-            runtime=_lambda.Runtime.PYTHON_3_12,
+            runtime=_lambda.Runtime.PYTHON_3_13,
             code=_lambda.Code.from_asset('lambda'),
             architecture=_lambda.Architecture.ARM_64,
             handler='lambda_functions.generate_ssl_materials',
@@ -1056,7 +1052,7 @@ class OpenemrEcsStack(Stack):
 
         # Create a function and run it once so that SSL is set up before the OpenEMR containers start
         self.one_time_create_ssl_materials_lambda = triggers.TriggerFunction(self, "OneTimeSSLSetup",
-                                                                             runtime=_lambda.Runtime.PYTHON_3_12,
+                                                                             runtime=_lambda.Runtime.PYTHON_3_13,
                                                                              code=_lambda.Code.from_asset('lambda'),
                                                                              architecture=_lambda.Architecture.ARM_64,
                                                                              handler='lambda_functions.generate_ssl_materials',
