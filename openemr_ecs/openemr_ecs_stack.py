@@ -178,25 +178,47 @@ class OpenemrEcsStack(Stack):
             allow_all_outbound=False
         )
         if self.node.try_get_context("certificate_arn") or self.node.try_get_context("route53_domain"):
-            cidr = self.node.try_get_context("security_group_ip_range")
-            if cidr:
+            cidr_ipv4 = self.node.try_get_context("security_group_ip_range_ipv4")
+            if cidr_ipv4:
                 self.lb_sec_group.add_ingress_rule(
-                    ec2.Peer.ipv4(cidr),
+                    ec2.Peer.ipv4(cidr_ipv4),
                     ec2.Port.tcp(443),
                 )
                 self.lb_sec_group.add_egress_rule(
-                    ec2.Peer.ipv4(cidr),
+                    ec2.Peer.ipv4(cidr_ipv4),
                     ec2.Port.tcp(443),
                 )
         else:
-            cidr = self.node.try_get_context("security_group_ip_range")
-            if cidr:
+            cidr_ipv4 = self.node.try_get_context("security_group_ip_range_ipv4")
+            if cidr_ipv4:
                 self.lb_sec_group.add_ingress_rule(
-                    ec2.Peer.ipv4(cidr),
+                    ec2.Peer.ipv4(cidr_ipv4),
                     ec2.Port.tcp(80),
                 )
                 self.lb_sec_group.add_egress_rule(
-                    ec2.Peer.ipv4(cidr),
+                    ec2.Peer.ipv4(cidr_ipv4),
+                    ec2.Port.tcp(80),
+                )
+        if self.node.try_get_context("certificate_arn") or self.node.try_get_context("route53_domain"):
+            cidr_ipv6 = self.node.try_get_context("security_group_ip_range_ipv6")
+            if cidr_ipv6:
+                self.lb_sec_group.add_ingress_rule(
+                    ec2.Peer.ipv6(cidr_ipv6),
+                    ec2.Port.tcp(443),
+                )
+                self.lb_sec_group.add_egress_rule(
+                    ec2.Peer.ipv6(cidr_ipv6),
+                    ec2.Port.tcp(443),
+                )
+        else:
+            cidr_ipv6 = self.node.try_get_context("security_group_ip_range_ipv6")
+            if cidr_ipv6:
+                self.lb_sec_group.add_ingress_rule(
+                    ec2.Peer.ipv6(cidr_ipv6),
+                    ec2.Port.tcp(80),
+                )
+                self.lb_sec_group.add_egress_rule(
+                    ec2.Peer.ipv6(cidr_ipv6),
                     ec2.Port.tcp(80),
                 )
 

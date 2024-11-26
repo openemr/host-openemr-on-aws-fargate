@@ -15,7 +15,8 @@
     ]
   },
   "context": {
-    "security_group_ip_range": null,
+    "security_group_ip_range_ipv4": null,
+    "security_group_ip_range_ipv6": null,
     "certificate_arn": null,
     "email_forwarding_address": null,
     "route53_domain": null,
