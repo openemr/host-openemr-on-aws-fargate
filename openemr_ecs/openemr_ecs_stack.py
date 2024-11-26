@@ -1252,6 +1252,12 @@ class OpenemrEcsStack(Stack):
         openemr_application_load_balanced_fargate_service.node.add_dependency(self.one_time_create_ssl_materials_lambda)
         openemr_service = openemr_application_load_balanced_fargate_service.service
 
+        # Add availability zone rebalancing.
+        # This will allow us to recover better in the event an avalability zone goes down.
+        # Documentation here: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-rebalancing.html
+        cfn_openemr_service = openemr_service.node.default_child
+        cfn_openemr_service.add_property_override("AvailabilityZoneRebalancing","ENABLED")
+
         # Configure health check
         openemr_application_load_balanced_fargate_service.target_group.configure_health_check(
             protocol=elb.Protocol.HTTPS,
@@ -1265,7 +1271,6 @@ class OpenemrEcsStack(Stack):
 
         # Set up ECS Exec for Debuggging
         if self.node.try_get_context("enable_ecs_exec") == "true":
-            cfn_openemr_service = openemr_service.node.default_child
             cfn_openemr_service.add_property_override("EnableExecuteCommand", "True")
             openemr_fargate_task_definition.task_role.add_to_policy(
                 iam.PolicyStatement(
