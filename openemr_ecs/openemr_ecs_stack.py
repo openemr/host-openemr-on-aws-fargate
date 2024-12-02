@@ -1047,7 +1047,7 @@ class OpenemrEcsStack(Stack):
         # Create generate SSL materials Lambda
         create_ssl_materials_lambda = _lambda.Function(
             self, 'MaintainSSLMaterialsLambda',
-            runtime=_lambda.Runtime.PYTHON_3_12,
+            runtime=self.lambda_python_runtime,
             code=_lambda.Code.from_asset('lambda'),
             architecture=_lambda.Architecture.ARM_64,
             handler='lambda_functions.generate_ssl_materials',
