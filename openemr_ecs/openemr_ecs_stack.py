@@ -1,5 +1,7 @@
 from aws_cdk import (
     Stack,
+    aws_sagemaker as sagemaker,
+    aws_emrserverless as emrserverless,
     aws_ec2 as ec2,
     aws_ecs as ecs,
     aws_efs as efs,
@@ -33,17 +35,23 @@ from aws_cdk import (
 )
 from constructs import Construct
 
-
 class OpenemrEcsStack(Stack):
 
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
+        # initialize variables
         self.cidr = "10.0.0.0/16"
         self.mysql_port = 3306
         self.valkey_port = 6379
         self.container_port = 443
         self.number_of_days_to_regenerate_ssl_materials = 2
+        self.emr_serverless_release_label = "emr-7.3.0"
+        self.aurora_mysql_engine_version = rds.AuroraMysqlEngineVersion.VER_3_08_0
+        self.openemr_version = "7.0.2"
+        self.lambda_python_runtime = _lambda.Runtime.PYTHON_3_13
+
+        # build infrastructure
         self._create_vpc()
         self._create_security_groups()
         self._create_elb_log_bucket()
@@ -60,6 +68,7 @@ class OpenemrEcsStack(Stack):
         self._create_ecs_cluster()
         self._create_and_maintain_tls_materials()
         self._create_openemr_service()
+        self._create_serverless_analytics_environment()
 
     def _create_vpc(self):
         vpc_flow_role = iam.Role(
@@ -513,7 +522,7 @@ class OpenemrEcsStack(Stack):
             )
             # Create a function and run it once so our SMTP parameter is properly set
             self.one_time_generate_smtp_credential_lambda = triggers.TriggerFunction(self, "SMTPSetup",
-                                                                                 runtime=_lambda.Runtime.PYTHON_3_13,
+                                                                                 runtime=self.lambda_python_runtime,
                                                                                  code=_lambda.Code.from_asset('lambda'),
                                                                                  architecture=_lambda.Architecture.ARM_64,
                                                                                  handler='lambda_functions.generate_smtp_credential',
@@ -636,7 +645,7 @@ class OpenemrEcsStack(Stack):
                 self.email_forwarding_lambda = _lambda.Function(
                     self,
                     "EmailForwardingLambda",
-                    runtime=_lambda.Runtime.PYTHON_3_13,
+                    runtime=self.lambda_python_runtime,
                     code=_lambda.Code.from_asset('lambda'),
                     architecture=_lambda.Architecture.ARM_64,
                     handler='lambda_functions.send_email',
@@ -689,7 +698,7 @@ class OpenemrEcsStack(Stack):
             self.set_rule_set_to_active = triggers.TriggerFunction(
                 self,
                 "MakeRuleSetActive",
-                 runtime=_lambda.Runtime.PYTHON_3_13,
+                 runtime=self.lambda_python_runtime,
                  code=_lambda.Code.from_asset('lambda'),
                  architecture=_lambda.Architecture.ARM_64,
                  handler='lambda_functions.make_ruleset_active',
@@ -763,14 +772,14 @@ class OpenemrEcsStack(Stack):
         parameter_group = rds.ParameterGroup(
             self,
             "ParameterGroup",
-            engine=rds.DatabaseClusterEngine.aurora_mysql(version=rds.AuroraMysqlEngineVersion.VER_3_08_0),
+            engine=rds.DatabaseClusterEngine.aurora_mysql(version=self.aurora_mysql_engine_version),
             parameters=parameters
         )
 
         if self.node.try_get_context("enable_data_api") == "true":
             self.db_instance = rds.DatabaseCluster(self, "DatabaseCluster",
                                                    engine=rds.DatabaseClusterEngine.aurora_mysql(
-                                                       version=rds.AuroraMysqlEngineVersion.VER_3_08_0),
+                                                       version=self.aurora_mysql_engine_version),
                                                    cloudwatch_logs_exports=["audit", "error", "general", "slowquery"],
                                                    writer=rds.ClusterInstance.serverless_v2("writer"),
                                                    enable_data_api=True,
@@ -792,7 +801,7 @@ class OpenemrEcsStack(Stack):
         else:
             self.db_instance = rds.DatabaseCluster(self, "DatabaseCluster",
                                                    engine=rds.DatabaseClusterEngine.aurora_mysql(
-                                                       version=rds.AuroraMysqlEngineVersion.VER_3_08_0),
+                                                       version=self.aurora_mysql_engine_version),
                                                    cloudwatch_logs_exports=["audit", "error", "general", "slowquery"],
                                                    writer=rds.ClusterInstance.serverless_v2("writer"),
                                                    enable_performance_insights=True,
@@ -941,7 +950,6 @@ class OpenemrEcsStack(Stack):
             vpc=self.vpc,
             encrypted=True,
             removal_policy=RemovalPolicy.DESTROY,
-
         )
 
         # Create EFS volume configuration for sites folder
@@ -1007,7 +1015,7 @@ class OpenemrEcsStack(Stack):
                                                                             entry_point=["/bin/sh", "-c"],
                                                                             command=command_array,
                                                                             image=ecs.ContainerImage.from_registry(
-                                                                                "openemr/openemr:7.0.2")
+                                                                            f"openemr/openemr:{self.openemr_version}")
                                                                             )
 
         # Create mount point for EFS for ssl folder
@@ -1039,7 +1047,7 @@ class OpenemrEcsStack(Stack):
         # Create generate SSL materials Lambda
         create_ssl_materials_lambda = _lambda.Function(
             self, 'MaintainSSLMaterialsLambda',
-            runtime=_lambda.Runtime.PYTHON_3_13,
+            runtime=_lambda.Runtime.PYTHON_3_12,
             code=_lambda.Code.from_asset('lambda'),
             architecture=_lambda.Architecture.ARM_64,
             handler='lambda_functions.generate_ssl_materials',
@@ -1074,7 +1082,7 @@ class OpenemrEcsStack(Stack):
 
         # Create a function and run it once so that SSL is set up before the OpenEMR containers start
         self.one_time_create_ssl_materials_lambda = triggers.TriggerFunction(self, "OneTimeSSLSetup",
-                                                                             runtime=_lambda.Runtime.PYTHON_3_13,
+                                                                             runtime=self.lambda_python_runtime,
                                                                              code=_lambda.Code.from_asset('lambda'),
                                                                              architecture=_lambda.Architecture.ARM_64,
                                                                              handler='lambda_functions.generate_ssl_materials',
@@ -1201,7 +1209,7 @@ class OpenemrEcsStack(Stack):
                                                                               interval=Duration.seconds(120)
                                                                           ),
                                                                           image=ecs.ContainerImage.from_registry(
-                                                                              "openemr/openemr:7.0.2"),
+                                                                              f"openemr/openemr:{self.openemr_version}"),
                                                                           secrets=secrets
                                                                           )
 
@@ -1434,3 +1442,489 @@ class OpenemrEcsStack(Stack):
         )
 
         web_acl.node.add_dependency(self.alb)
+
+    def _create_serverless_analytics_environment(self):
+
+        if self.node.try_get_context("create_serverless_analytics_environment") == "true":
+
+            # Extract the unique stack ID (last segment of the Stack ID)
+            non_alphanumeric_unique_id = self.stack_id.split("/")[-1]
+
+            # Remove all non-alphanumeric characters to make a unique id we can use with IAM role names
+            unique_id = ''.join(ch for ch in non_alphanumeric_unique_id if ch.isalnum())
+
+            # Create a key and give cloudwatch logs, rds, rds export and s3 permissions to use it
+            self.analytics_kms_key = kms.Key(self, "AnalyticsKmsKey", enable_key_rotation=True)
+            self.analytics_kms_key.grant_encrypt_decrypt(iam.ServicePrincipal("logs." + self.region + ".amazonaws.com"))
+            self.analytics_kms_key.grant_encrypt_decrypt(iam.ServicePrincipal("export.rds.amazonaws.com"))
+            self.analytics_kms_key.grant_encrypt_decrypt(iam.ServicePrincipal("rds.amazonaws.com"))
+
+            # Create KMS key policy statement
+            kms_policy_statement = iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=[
+                    "kms:CreateGrant",
+                    "kms:ListGrants",
+                    "kms:RevokeGrant",
+                    "kms:GenerateDataKeyWithoutPlaintext",
+                    "kms:DescribeKey",
+                    "kms:RetireGrant"
+                ],
+                resources=[self.analytics_kms_key.key_arn]
+            )
+
+            # Create an S3 bucket for rds export
+            self.export_bucket_rds = s3.Bucket(self, "S3ExportBucket",
+                auto_delete_objects=True,
+                removal_policy=RemovalPolicy.DESTROY,
+                encryption_key=self.analytics_kms_key,
+                block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+                enforce_ssl=True,
+                versioned=True
+            )
+
+            # Create an S3 bucket for EFS export
+            self.export_bucket_efs = s3.Bucket(self, "EFSExportBucket",
+                auto_delete_objects=True,
+                removal_policy=RemovalPolicy.DESTROY,
+                encryption_key=self.analytics_kms_key,
+                block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+                enforce_ssl=True,
+                versioned=True
+            )
+
+            # Get private subnet ids
+            private_subnets_ids = [ps.subnet_id for ps in self.vpc.private_subnets]
+
+            # Create an IAM role for the Aurora database to export to S3
+            aurora_s3_export_role = iam.Role(
+                self,
+                "AuroraExportRole",
+                assumed_by=iam.ServicePrincipal("export.rds.amazonaws.com"),
+            )
+
+            # Grant read/write permissions to the aurora role to the S3 bucket
+            self.export_bucket_rds.grant_read_write(aurora_s3_export_role)
+
+            # Create an IAM role for SageMaker
+            # Must start role name with "AmazonSageMaker" for all permissions to work.
+            # For documentation see here:
+            # https://docs.aws.amazon.com/sagemaker/latest/dg/security-iam-awsmanpol.html#security-iam-awsmanpol-AmazonSageMakerFullAccess
+            sagemaker_role = iam.Role(
+                self,
+                "SageMakerExecutionRole",
+                role_name=f"AmazonSageMakerSMRole{unique_id}",
+                assumed_by=iam.ServicePrincipal("sagemaker.amazonaws.com")
+            )
+
+            # Add S3 read/write permissions to the sagemaker role
+            self.export_bucket_rds.grant_read_write(sagemaker_role)
+            self.export_bucket_efs.grant_read_write(sagemaker_role)
+
+            # Create an EMR Serverless application
+            emr_app = emrserverless.CfnApplication(
+                self,
+                "EMRServerlessApp",
+                release_label=self.emr_serverless_release_label,
+                type="SPARK",
+                name="MyEMRServerlessApp",
+            )
+
+            # Create SageMaker Domain
+            sagemaker_domain = sagemaker.CfnDomain(
+                self,
+                "OpenEMRSagemakerDomain",
+                auth_mode="IAM",
+                default_user_settings=sagemaker.CfnDomain.UserSettingsProperty(
+                    execution_role=sagemaker_role.role_arn
+                ),
+                domain_name="SagemakerEMRDomain",
+                vpc_id=self.vpc.vpc_id,
+                subnet_ids=private_subnets_ids,
+            )
+
+            # Create task to sync EFS to S3
+            sync_efs_to_s3_task = ecs.FargateTaskDefinition(
+                self,
+                "SyncEFStoS3Task",
+                cpu=256,
+                memory_limit_mib=512,
+                runtime_platform=ecs.RuntimePlatform(
+                    cpu_architecture=ecs.CpuArchitecture.ARM64
+                )
+            )
+
+            # Add EFS volume
+            sync_efs_to_s3_task.add_volume(
+                name='SitesFolderVolume',
+                efs_volume_configuration=self.efs_volume_configuration_for_sites_folder
+            )
+
+            # This script syncs our EFS to the target s3 bucket
+            command_array = [
+            f"apk add --no-cache aws-cli \
+            && aws s3 sync /var/www/localhost/htdocs/openemr/sites/ s3://{self.export_bucket_efs.bucket_name} --delete"
+            ]
+
+            # Add container definition for OpenEMR to the task that will be used to sync EFS to s3
+            sync_efs_to_s3_container = sync_efs_to_s3_task.add_container("AmazonLinuxContainer",
+                                                                        logging=ecs.LogDriver.aws_logs(
+                                                                            stream_prefix="ecs/efstos3",
+                                                                            log_group=self.log_group, ),
+                                                                        port_mappings=[ecs.PortMapping(
+                                                                            container_port=self.container_port)],
+                                                                        essential=True,
+                                                                        container_name="openemr",
+                                                                        entry_point=["/bin/sh", "-c"],
+                                                                        command=command_array,
+                                                                        image=ecs.ContainerImage.from_registry(
+                                                                            f"openemr/openemr:{self.openemr_version}")
+                                                                    )
+
+            # Create mount point for EFS for sites folder.
+            # Make read_only because we should not be writing here now; all we're doing is exporting from EFS to S3.
+            efs_mount_point_for_sites_folder = ecs.MountPoint(
+                container_path="/var/www/localhost/htdocs/openemr/sites/",
+                read_only=True,
+                source_volume='SitesFolderVolume'
+            )
+
+            # Add mount points to container definition
+            sync_efs_to_s3_container.add_mount_points(
+                efs_mount_point_for_sites_folder
+            )
+
+            # Create an EFS to S3 export Lambda
+            export_efs_to_s3_lambda = _lambda.Function(
+                self, 'EFStoS3ExportLambda',
+                runtime=self.lambda_python_runtime,
+                code=_lambda.Code.from_asset('lambda'),
+                architecture=_lambda.Architecture.ARM_64,
+                handler='lambda_functions.sync_efs_to_s3',
+                timeout=Duration.minutes(10)
+            )
+
+            # Get private subnet ID string
+            private_subnets_ids = [ps.subnet_id for ps in self.vpc.private_subnets]
+            private_subnet_id_string = ','.join(private_subnets_ids)
+
+            # Add environment variables
+            export_efs_to_s3_lambda.add_environment('ECS_CLUSTER', self.ecs_cluster.cluster_arn)
+            export_efs_to_s3_lambda.add_environment('TASK_DEFINITION', sync_efs_to_s3_task.task_definition_arn)
+            export_efs_to_s3_lambda.add_environment('SUBNETS', private_subnet_id_string)
+            export_efs_to_s3_lambda.add_environment('SECURITY_GROUPS', self.efs_only_security_group.security_group_id)
+
+            # Allow connections to and from both of our EFSs for our Fargate task
+            self.efs_only_security_group.connections.allow_to(self.file_system_for_sites_folder, ec2.Port.tcp(2049))
+            self.efs_only_security_group.connections.allow_from(self.file_system_for_sites_folder, ec2.Port.tcp(2049))
+
+            # Grant read write for the export s3 bucket for EFS to the task role
+            self.export_bucket_efs.grant_read_write(sync_efs_to_s3_task.task_role)
+
+            # Grant additional KMS permissions to task role
+            sync_efs_to_s3_task.task_role.add_to_principal_policy(kms_policy_statement)
+
+            # Allow lambda to run the ECS task
+            sync_efs_to_s3_task.grant_run(export_efs_to_s3_lambda.grant_principal)
+
+            # Add permissions for RDS export to access the rds export s3 bucket
+            rds_export_access_to_s3_bucket_policy_statement_service_principal = iam.PolicyStatement(
+                actions=["s3:*"],
+                resources=[self.export_bucket_rds.bucket_arn, f"{self.export_bucket_rds.bucket_arn}/*"],
+                principals=[iam.ServicePrincipal("export.rds.amazonaws.com")]
+            )
+            self.export_bucket_rds.add_to_resource_policy(
+                rds_export_access_to_s3_bucket_policy_statement_service_principal
+            )
+            rds_export_access_to_s3_bucket_policy_statement_iam_arn_principal = iam.PolicyStatement(
+                actions=["s3:*"],
+                resources=[self.export_bucket_rds.bucket_arn, f"{self.export_bucket_rds.bucket_arn}/*"],
+                principals=[iam.ArnPrincipal(aurora_s3_export_role.role_arn)]
+            )
+            self.export_bucket_rds.add_to_resource_policy(
+                rds_export_access_to_s3_bucket_policy_statement_iam_arn_principal
+            )
+
+            # Create an RDS to S3 export Lambda
+            export_rds_to_s3_lambda = _lambda.Function(
+                self, 'RDStoS3ExportLambda',
+                runtime=self.lambda_python_runtime,
+                code=_lambda.Code.from_asset('lambda'),
+                architecture=_lambda.Architecture.ARM_64,
+                handler='lambda_functions.export_from_rds_to_s3',
+                timeout=Duration.minutes(10)
+            )
+
+            # Grant permissions to decrypt and encrypt with the encryption key
+            self.analytics_kms_key.grant_encrypt_decrypt(export_rds_to_s3_lambda.grant_principal)
+            self.analytics_kms_key.grant_encrypt_decrypt(aurora_s3_export_role)
+            self.analytics_kms_key.grant_encrypt_decrypt(sagemaker_role)
+            self.analytics_kms_key.grant_encrypt_decrypt(sync_efs_to_s3_task.task_role)
+
+            # Add environment variable
+            export_rds_to_s3_lambda.add_environment('DB_CLUSTER_ARN', self.db_instance.cluster_arn)
+            export_rds_to_s3_lambda.add_environment('KMS_KEY_ID', self.analytics_kms_key.key_id)
+            export_rds_to_s3_lambda.add_environment('S3_BUCKET_NAME', self.export_bucket_rds.bucket_name)
+            export_rds_to_s3_lambda.add_environment('EXPORT_ROLE_ARN', aurora_s3_export_role.role_arn)
+
+            # Create policy statements to allow lambda to run rds export task and add them to the function
+            rds_policy_statement = iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=["rds:StartExportTask", "rds:DescribeDBSnapshots", "rds:DescribeExportTasks"],
+                resources=[self.db_instance.cluster_arn]
+            )
+            export_rds_to_s3_lambda.add_to_role_policy(rds_policy_statement)
+            iam_policy_statement = iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=["iam:PassRole"],
+                resources=[aurora_s3_export_role.role_arn]
+            )
+            export_rds_to_s3_lambda.add_to_role_policy(iam_policy_statement)
+
+            # Add KMS policy statement
+            export_rds_to_s3_lambda.add_to_role_policy(kms_policy_statement)
+
+            # Create EFS for sagemaker
+            self.file_system_for_sagemaker = efs.FileSystem(
+                self,
+                "EfsFileSystemForSagemaker",
+                vpc=self.vpc,
+                encrypted=True,
+                removal_policy=RemovalPolicy.DESTROY,
+            )
+
+            # Grant permission for users to invoke the Lambdas
+            export_efs_to_s3_lambda.grant_invoke(sagemaker_role)
+            export_rds_to_s3_lambda.grant_invoke(sagemaker_role)
+
+            # Add ability for the security group to access the EFS for sagemaker
+            self.file_system_for_sagemaker.connections.allow_default_port_from(self.efs_only_security_group)
+            self.file_system_for_sagemaker.connections.allow_default_port_to(self.efs_only_security_group)
+
+            # Create a SageMaker user profile
+            sagemaker_user = sagemaker.CfnUserProfile(
+                self,
+                "SagemakerUserProfile",
+                domain_id=sagemaker_domain.attr_domain_id,
+                user_profile_name="ServerlessAnalyticsUser",
+                user_settings=sagemaker.CfnUserProfile.UserSettingsProperty(
+                    security_groups=[self.efs_only_security_group.security_group_id],
+                    execution_role=sagemaker_role.role_arn,
+                    custom_file_system_configs=[
+                        sagemaker.CfnUserProfile.CustomFileSystemConfigProperty(
+                            efs_file_system_config=sagemaker.CfnUserProfile.EFSFileSystemConfigProperty(
+                                file_system_id=self.file_system_for_sagemaker.file_system_id,
+                                file_system_path="/share"
+                            ))
+                    ]
+                )
+            )
+
+            # Grant the SageMaker role permissions to access EMR Serverless
+            emr_policy_statement = iam.PolicyStatement(
+                actions=[
+                    "emr-serverless:StartApplication",
+                    "emr-serverless:StopApplication",
+                    "emr-serverless:UpdateApplication",
+                    "emr-serverless:RunJob",
+                    "emr-serverless:CancelJobRun",
+                    "emr-serverless:GetJobRun",
+                    "emr-serverless:GetApplication",
+                    "emr-serverless:AccessLivyEndpoints",
+                    "emr-serverless:GetDashboardForJobRun"
+                ],
+                resources=[f"arn:aws:emr-serverless:{self.region}:{self.account}:applications/{emr_app.ref}"],
+            )
+            sagemaker_role.add_to_policy(emr_policy_statement)
+
+            # Attach the required AmazonSageMakerFullAccess policy to our SageMaker role
+            sagemaker_role.add_managed_policy(
+                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerFullAccess")
+            )
+
+            # Attach the required AmazonRDSDataFullAccess policy for RDS export
+            aurora_s3_export_role.add_managed_policy(
+                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonRDSDataFullAccess")
+            )
+
+            # Create an IAM role with Glue permissions and permissions for EMR-serverless to assume
+            # Must start role name with "AmazonSageMaker" for all permissions to work.
+            # For documentation see here:
+            # https://docs.aws.amazon.com/sagemaker/latest/dg/security-iam-awsmanpol.html#security-iam-awsmanpol-AmazonSageMakerFullAccess
+            glue_role = iam.Role(
+                self,
+                "GlueRoleForEMRServerless",
+                role_name=f"AmazonSageMakerGlueRole{unique_id}",
+                assumed_by=iam.ServicePrincipal("emr-serverless.amazonaws.com"),  # EMR Serverless trust relationship
+                description="IAM Role with Glue permissions for EMR Serverless",
+            )
+
+            # Attach Glue permissions to the role
+            glue_role.add_managed_policy(
+                iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSGlueServiceRole")
+            )
+
+            # Add custom permissions for Glue operations
+            glue_role.add_to_policy(
+                iam.PolicyStatement(
+                    actions=[
+                        "glue:GetDatabase",
+                        "glue:CreateDatabase",
+                        "glue:GetDataBases",
+                        "glue:CreateTable",
+                        "glue:GetTable",
+                        "glue:UpdateTable",
+                        "glue:DeleteTable",
+                        "glue:GetTables",
+                        "glue:GetPartition",
+                        "glue:GetPartitions",
+                        "glue:CreatePartition",
+                        "glue:BatchCreatePartition",
+                        "glue:GetUserDefinedFunctions"
+                    ],
+                    resources=["*"],  # Restrict resources as needed
+                )
+            )
+
+            # Grant read/write permissions to the glue role to the S3 bucket
+            self.export_bucket_rds.grant_read_write(glue_role)
+            self.export_bucket_efs.grant_read_write(glue_role)
+
+            # Define the policy statements to allow sagemaker to integrate with emr serverless
+            policy_statements = [
+
+                # This allows the listing of applications
+                iam.PolicyStatement(
+                    sid="EMRServerlessUnTaggedActions",
+                    effect=iam.Effect.ALLOW,
+                    actions=["emr-serverless:ListApplications"],
+                    resources=[f"arn:aws:emr-serverless:{self.region}:{self.account}:/*"],
+                ),
+
+                # This allows sagemaker to pass role to EMR serverless
+                iam.PolicyStatement(
+                    sid="EMRServerlessPassRole",
+                    effect=iam.Effect.ALLOW,
+                    actions=["iam:PassRole"],
+                    resources=[glue_role.role_arn],
+                    conditions={
+                        "StringLike": {
+                            "iam:PassedToService": "emr-serverless.amazonaws.com",
+                        }
+                    },
+                ),
+
+                # This allows the creation and tagging of EMR serverless applications
+                iam.PolicyStatement(
+                    sid="EMRServerlessCreateApplicationAction",
+                    effect=iam.Effect.ALLOW,
+                    actions=[
+                        "emr-serverless:CreateApplication",
+                        "emr-serverless:TagResource",
+                    ],
+                    resources=[f"arn:aws:emr-serverless:{self.region}:{self.account}:/*"],
+                    conditions={
+                        "ForAllValues:StringEquals": {
+                            "aws:TagKeys": [
+                                "sagemaker:domain-arn",
+                                "sagemaker:user-profile-arn",
+                                "sagemaker:space-arn",
+                            ]
+                        },
+                        "Null": {
+                            "aws:RequestTag/sagemaker:domain-arn": "false",
+                            "aws:RequestTag/sagemaker:user-profile-arn": "false",
+                            "aws:RequestTag/sagemaker:space-arn": "false",
+                        },
+                    },
+                ),
+
+                # This makes the EMR serverless permissions more restrictive
+                iam.PolicyStatement(
+                    sid="EMRServerlessDenyPermissiveTaggingAction",
+                    effect=iam.Effect.DENY,
+                    actions=[
+                        "emr-serverless:TagResource",
+                        "emr-serverless:UntagResource",
+                    ],
+                    resources=[f"arn:aws:emr-serverless:{self.region}:{self.account}:/*"],
+                    conditions={
+                        "Null": {
+                            "aws:ResourceTag/sagemaker:domain-arn": "true",
+                            "aws:ResourceTag/sagemaker:user-profile-arn": "true",
+                            "aws:ResourceTag/sagemaker:space-arn": "true",
+                        },
+                    },
+                ),
+
+                # This allows some emr serverless actions that Sagemaker will need to integrate
+                iam.PolicyStatement(
+                    sid="EMRServerlessActions",
+                    effect=iam.Effect.ALLOW,
+                    actions=[
+                        "emr-serverless:StartApplication",
+                        "emr-serverless:StopApplication",
+                        "emr-serverless:GetApplication",
+                        "emr-serverless:DeleteApplication",
+                        "emr-serverless:AccessLivyEndpoints",
+                        "emr-serverless:GetDashboardForJobRun",
+                    ],
+                    resources=[f"arn:aws:emr-serverless:{self.region}:{self.account}:/applications/*"],
+                    conditions={
+                        "Null": {
+                            "aws:ResourceTag/sagemaker:domain-arn": "false",
+                            "aws:ResourceTag/sagemaker:user-profile-arn": "false",
+                            "aws:ResourceTag/sagemaker:space-arn": "false",
+                        },
+                    },
+                ),
+
+                # This allows the pulling of custom container images in the into sagemaker for use with analysis
+                # This policy allows the pulling of images in the same account so deploy any images you want to ECR
+                iam.PolicyStatement(
+                    sid="ECRRepositoryListGetPolicy",
+                    effect=iam.Effect.ALLOW,
+                    actions=[
+                        "ecr:GetDownloadUrlForLayer",
+                        "ecr:BatchGetImage",
+                        "ecr:DescribeImages"
+                    ],
+                    resources=[f"arn:aws:ecr:*:{self.account}:*/*"]
+                ),
+
+                # Grant the ability to monitor RDS export tasks for our specific database
+                iam.PolicyStatement(
+                    sid="RDSMonitorExportTasks",
+                    effect=iam.Effect.ALLOW,
+                    actions=[
+                        "rds:DescribeExportTasks"
+                    ],
+                    resources=[self.db_instance.cluster_arn]
+                ),
+
+                # Grant the ability to describe running ECS tasks for our EFS to S3 export job
+                iam.PolicyStatement(
+                    effect=iam.Effect.ALLOW,
+                    actions=["ecs:DescribeTasks"],
+                    resources=["*"],
+                    conditions={
+                        "ArnEquals": {
+                            "ecs:TaskArn": sync_efs_to_s3_task.task_definition_arn
+                        }
+                    }
+                ),
+
+                # Grant additional KMS permissions
+                kms_policy_statement
+            ]
+
+            # Create a policy with the statements
+            policy = iam.Policy(
+                self,
+                "EMRServerlessPolicy",
+                policy_name="EMRServerlessPolicy",
+                statements=policy_statements,
+            )
+
+            # Attach the policy to the existing role
+            policy.attach_to_role(sagemaker_role)

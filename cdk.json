@@ -32,6 +32,7 @@
     "enable_global_accelerator": "false",
     "open_smtp_port": "false",
     "configure_ses": "false",
+    "create_serverless_analytics_environment": "false",
     "aurora_ml_inference_timeout": "30000",
     "net_read_timeout": "30000",
     "net_write_timeout": "30000",
