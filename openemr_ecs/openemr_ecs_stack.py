@@ -1750,6 +1750,7 @@ class OpenemrEcsStack(Stack):
                     "emr-serverless:AccessLivyEndpoints",
                     "emr-serverless:GetDashboardForJobRun"
                 ],
+                effect=iam.Effect.ALLOW,
                 resources=[f"arn:aws:emr-serverless:{self.region}:{self.account}:applications/{emr_app.ref}"],
             )
             sagemaker_role.add_to_policy(emr_policy_statement)
@@ -1758,6 +1759,25 @@ class OpenemrEcsStack(Stack):
             sagemaker_role.add_managed_policy(
                 iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerFullAccess")
             )
+
+            # Attach the required AmazonSageMakerClusterInstanceRolePolicy policy to our SageMaker role
+            sagemaker_role.add_managed_policy(
+                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerClusterInstanceRolePolicy")
+            )
+
+            # Grant the SageMaker role permissions to run instances and jobs
+            emr_policy_statement = iam.PolicyStatement(
+                actions=[
+                    "sagemaker:CreateNotebookInstance",
+                    "sagemaker:CreateHyperParameterTuningJob",
+                    "sagemaker:CreateProcessingJob",
+                    "sagemaker:CreateTrainingJob",
+                    "sagemaker:CreateModel"
+                ],
+                effect=iam.Effect.ALLOW,
+                resources=["*"],
+            )
+            sagemaker_role.add_to_policy(emr_policy_statement)
 
             # Attach the required AmazonRDSDataFullAccess policy for RDS export
             aurora_s3_export_role.add_managed_policy(
