@@ -338,6 +338,10 @@ They are (in-order) ... :
 5. Studio Classic (will reach end of maintenance on December 31st 2024)<br />![alt text](./docs/studio_classic.png)
 6. MLFlow<br />![alt text](./docs/MLFlow.png)
 
+### Administering Access to the Environment
+
+Access is controlled to the serverless analytics environment by AWS IAM. All of the functionality above requires IAM permissions and this functionality can be entirely or partially removed by restricting these permissions. Good documentation regarding best practices for IAM management as it relates to Sagemaker can be found [here](https://docs.aws.amazon.com/whitepapers/latest/sagemaker-studio-admin-best-practices/permissions-management.html).
+
 # Automating DNS Setup
 
 Note: to use SES with OpenEMR to send emails you will need to follow [the documentation from AWS to take your account out of SES sandbox mode](https://docs.aws.amazon.com/ses/latest/dg/request-production-access.html) (when you create an AWS account it starts out in sandbox mode by default).
