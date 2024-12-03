@@ -1797,12 +1797,6 @@ class OpenemrEcsStack(Stack):
                 iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerClusterInstanceRolePolicy")
             )
             sagemaker_role.add_managed_policy(
-                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerHyperPodServiceRolePolicy")
-            )
-            sagemaker_role.add_managed_policy(
-                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerClusterInstanceRolePolicy")
-            )
-            sagemaker_role.add_managed_policy(
                 iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerFeatureStoreAccess")
             )
             sagemaker_role.add_managed_policy(
@@ -1816,9 +1810,6 @@ class OpenemrEcsStack(Stack):
             )
             sagemaker_role.add_managed_policy(
                 iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerPipelinesIntegrations")
-            )
-            sagemaker_role.add_managed_policy(
-                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerGeospatialFullAccess")
             )
             sagemaker_role.add_managed_policy(
                 iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerCanvasFullAccess")
