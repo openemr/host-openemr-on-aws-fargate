@@ -1765,6 +1765,16 @@ class OpenemrEcsStack(Stack):
                 iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerClusterInstanceRolePolicy")
             )
 
+            # Attach the required AmazonElasticFileSystemReadOnlyAccess policy to our SageMaker role
+            sagemaker_role.add_managed_policy(
+                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonElasticFileSystemReadOnlyAccess")
+            )
+
+            # Attach the required AmazonElasticFileSystemClientReadWriteAccess policy to our SageMaker role
+            sagemaker_role.add_managed_policy(
+                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonElasticFileSystemClientReadWriteAccess")
+            )
+
             # Grant the SageMaker role permissions to run instances and jobs
             emr_policy_statement = iam.PolicyStatement(
                 actions=[
