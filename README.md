@@ -12,7 +12,11 @@
 - [Cost](#cost)
 - [Load Testing](#load-testing)
 - [Customizing Architecture Attributes](#customizing-architecture-attributes)
-- [Serverless Analytics Envrionment](#serverless-analytics-environment)
+- [Serverless Analytics Environment](#serverless-analytics-environment)
+    + [Importing OpenEMR Data into the Environment](#importing-openemr-data-into-the-environment)
+    + [Jupyterlab with Persistent Storage](#jupyterlab-with-persistent-storage)
+    + [Other Apps](#other-apps)
+    + [Administering Access to the Environment](#administering-access-to-the-environment)
 - [Automating DNS Setup](#automating-dns-setup)
 - [Enabling HTTPS for Client to Load Balancer Communication](#enabling-https-for-client-to-load-balancer-communication)
 - [How AWS Backup is Used in this Architecture](#how-aws-backup-is-used-in-this-architecture)
@@ -266,6 +270,39 @@ You can export all of the contents of OpenEMR's RDS Aurora Serverless v2 MySQL d
 ![alt text](./docs/rds_to_s3_export.png)
 
 Both transfer jobs are idempotent and can be run while the system is live with no downtime. The whole environment costs no money unless you choose to provision and use compute resources in it; for as long as it sits idle you will incur zero costs. If you do choose to use it you can find SageMaker pricing documentation [here](https://aws.amazon.com/sagemaker/pricing/?p=pm&c=sm&z=2).
+
+### Importing OpenEMR Data into the Environment
+
+Start by invoking at least one of the export Lambdas mentioned above. For the purposes of this demo we're going to use the Lambda that exports the OpenEMR sites directory from EFS to S3. If you have permissions you can invoke it from the console. It will take around ~3-4 seconds to successfully complete.
+
+![alt text](./docs/successful_invocation.png)
+
+That will launch a tiny (0.25 vCPU; 0.5GB) graviton Fargate task that will run until all the data is copied over. Your SageMaker execution role has permissions to describe this ECS task and you can poll it if you'd like to get up to date reports on its status. This ECS task's runtime will depend on how much file storage your OpenEMR installation is using. When it's done you can see the contents have been copied to the S3 bucket.
+
+![alt text](./docs/contents_trasnferred_to_S3.png)
+
+Your Sagemaker execution role has read and write access to both of the export S3 buckets (the one pictured above is for file exports from OpenEMR; the other one is for MySQL/RDS exports from OpenEMR which will appear as a bunch of [Apache Parquet](https://github.com/apache/parquet-format) files that are ready for you to run [Apache Spark](https://spark.apache.org/) jobs against with your EMRServerless cluster) and we now have many ways available to us to import data into Sagemaker for use in our applications. My preferred method is using [Data Wrangler](https://aws.amazon.com/sagemaker/data-wrangler/), which is accessible in Sagemaker Canvas console, because then you can use a UI and then just click on the S3 bucket and the items you want to download but you could also do this programmatically from a Jupyterlab notebook or a number of other ways with other apps.
+
+![alt text](./docs/data_wrangler.png)
+
+### Jupyterlab with Persistent Storage
+
+As someone who has professionally managed a Jupyterhub server in the past I can confidently say that my favorite Sagemaker feature is its Jupyterlab App. It comes setup by default and has persistent storage via a shared EFS volume and comes ready with a bunch of coding tools you can use to get started doing data analysis. To get started let's log in to Sagemaker Studio; then in the home screen click on the Jupyterlab app in the upper left hand corner of the screen.
+
+![alt text](./docs/jupyterlab_app_location.png)
+
+Next click on "Create Jupyterlab Space" in the upper right-hand corner of the console.
+
+![alt text](./docs/create_jupyterlab_space.png)
+
+You'll have the option to create either a private or a public space. The only difference is that a private space gets allocated an EFS that only your user can access while a public space gets allocated an EFS that multiple users can access at the same time. Having said that this architecture will only provision a single user profile called "ServerlessAnalyticsUser". If you're planning to make any additional Sagemaker user profiles and wanted to share things between them I'd recommend using a public space. Otherwise, it doesn't matter what you choose here.
+
+![alt text](./docs/create_jupyterlab_space.png)
+
+
+
+    + [Other Apps](#other-apps)
+    + [Administering Access to the Environment](#administering-access-to-the-environment)
 
 # Automating DNS Setup
 
