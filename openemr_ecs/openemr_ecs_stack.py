@@ -1448,9 +1448,10 @@ class OpenemrEcsStack(Stack):
 
         if self.node.try_get_context("create_serverless_analytics_environment") == "true":
 
-            # Make deterministic unique id
+            # Make an 18 character deterministic unique id
             # Sagemaker only integrates with certain infrastructure if "SageMaker" is in the name.
             # This unique ID allows us to create names that contain "SageMaker" while being safe from naming collisions.
+            # This is especially important because S3 names must be globally unique.
             unique_id = hashlib.md5(bytes(f"{self.node.addr}", 'utf-8')).hexdigest().lower()[:18]
 
             # Create a key and give cloudwatch logs, rds, rds export, sagemaker, EFS and s3 permissions to use it
@@ -1788,42 +1789,37 @@ class OpenemrEcsStack(Stack):
             self.export_bucket_rds.grant_read_write(glue_role)
             self.export_bucket_efs.grant_read_write(glue_role)
 
-            # Attach the managed AmazonSageMakerFullAccess policy to our sagemaker role.
+            # The following policies enable functionality within Sagemaker Studio and Canvas.
             sagemaker_role.add_managed_policy(
                 iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerFullAccess")
             )
-
-            # Attach the managed AmazonSageMakerClusterInstanceRolePolicy policy to our sagemaker role.
             sagemaker_role.add_managed_policy(
                 iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerClusterInstanceRolePolicy")
             )
-
-            # Attach the managed AmazonSageMakerFeatureStoreAccess policy to our sagemaker role.
+            sagemaker_role.add_managed_policy(
+                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerHyperPodServiceRolePolicy")
+            )
+            sagemaker_role.add_managed_policy(
+                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerClusterInstanceRolePolicy")
+            )
             sagemaker_role.add_managed_policy(
                 iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerFeatureStoreAccess")
             )
-
-            # Attach the managed AmazonSageMakerModelGovernanceUseAccess policy to our sagemaker role.
             sagemaker_role.add_managed_policy(
                 iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerModelGovernanceUseAccess")
             )
-
-            # Attach the managed AmazonSageMakerModelRegistryFullAccess policy to our sagemaker role.
             sagemaker_role.add_managed_policy(
                 iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerModelRegistryFullAccess")
             )
-
-            # Attach the managed AmazonSageMakerGroundTruthExecution policy to our sagemaker role.
             sagemaker_role.add_managed_policy(
                 iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerGroundTruthExecution")
             )
-
-            # Attach the managed AmazonSageMakerPipelinesIntegrations policy to our sagemaker role.
             sagemaker_role.add_managed_policy(
                 iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerPipelinesIntegrations")
             )
-
-            # Attach the managed AmazonSageMakerCanvasFullAccess policy to our sagemaker role.
+            sagemaker_role.add_managed_policy(
+                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerGeospatialFullAccess")
+            )
             sagemaker_role.add_managed_policy(
                 iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerCanvasFullAccess")
             )
