@@ -34,6 +34,7 @@ from aws_cdk import (
     ArnFormat
 )
 from constructs import Construct
+import hashlib
 
 class OpenemrEcsStack(Stack):
 
@@ -1447,19 +1448,25 @@ class OpenemrEcsStack(Stack):
 
         if self.node.try_get_context("create_serverless_analytics_environment") == "true":
 
-            # Extract the unique stack ID (last segment of the Stack ID)
-            non_alphanumeric_unique_id = self.stack_id.split("/")[-1]
+            # Make deterministic unique id
+            # Sagemaker only integrates with certain infrastructure if "SageMaker" is in the name.
+            # This unique ID allows us to create names that contain "SageMaker" while being safe from naming collisions.
+            unique_id = hashlib.md5(bytes(f"{self.node.addr}", 'utf-8')).hexdigest().lower()[:18]
 
-            # Remove all non-alphanumeric characters to make a unique id we can use with IAM role names
-            unique_id = ''.join(ch for ch in non_alphanumeric_unique_id if ch.isalnum())
-
-            # Create a key and give cloudwatch logs, rds, rds export and s3 permissions to use it
-            self.analytics_kms_key = kms.Key(self, "AnalyticsKmsKey", enable_key_rotation=True)
+            # Create a key and give cloudwatch logs, rds, rds export, sagemaker, EFS and s3 permissions to use it
+            # This key will be used to encrypt everything in the serverless analytics environment
+            self.analytics_kms_key = kms.Key(self,
+                                             "AnalyticsKmsKey",
+                                             alias=f"AmazonSageMakerSMKMS{unique_id}{self.account}{self.region}",
+                                             enable_key_rotation=True
+                                             )
             self.analytics_kms_key.grant_encrypt_decrypt(iam.ServicePrincipal("logs." + self.region + ".amazonaws.com"))
             self.analytics_kms_key.grant_encrypt_decrypt(iam.ServicePrincipal("export.rds.amazonaws.com"))
             self.analytics_kms_key.grant_encrypt_decrypt(iam.ServicePrincipal("rds.amazonaws.com"))
+            self.analytics_kms_key.grant_encrypt_decrypt(iam.ServicePrincipal("sagemaker.amazonaws.com"))
+            self.analytics_kms_key.grant_encrypt_decrypt(iam.ServicePrincipal("elasticfilesystem.amazonaws.com"))
 
-            # Create KMS key policy statement
+            # Create policy statement that grants permissions needed for apps to integrate with our KMS key.
             kms_policy_statement = iam.PolicyStatement(
                 effect=iam.Effect.ALLOW,
                 actions=[
@@ -1473,19 +1480,12 @@ class OpenemrEcsStack(Stack):
                 resources=[self.analytics_kms_key.key_arn]
             )
 
-            # Create EFS for sagemaker
-            self.file_system_for_sagemaker = efs.FileSystem(
-                self,
-                "EfsFileSystemForSagemaker",
-                vpc=self.vpc,
-                encrypted=True,
-                removal_policy=RemovalPolicy.DESTROY,
-            )
-
-            # Create an S3 bucket for rds export
+            # Create an S3 bucket for RDS export
+            # Exports of data in the MySQL database in RDS will end up here.
             self.export_bucket_rds = s3.Bucket(self, "S3ExportBucket",
                 auto_delete_objects=True,
                 removal_policy=RemovalPolicy.DESTROY,
+                bucket_name=f"sagemaker-rds-export-{unique_id}-{self.account}-{self.region}",
                 encryption_key=self.analytics_kms_key,
                 block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
                 enforce_ssl=True,
@@ -1493,9 +1493,11 @@ class OpenemrEcsStack(Stack):
             )
 
             # Create an S3 bucket for EFS export
+            # Exports of data in the EFS that hosts the "sites" folder will end up here.
             self.export_bucket_efs = s3.Bucket(self, "EFSExportBucket",
                 auto_delete_objects=True,
                 removal_policy=RemovalPolicy.DESTROY,
+                bucket_name=f"sagemaker-efs-export-{unique_id}-{self.account}-{self.region}",
                 encryption_key=self.analytics_kms_key,
                 block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
                 enforce_ssl=True,
@@ -1515,6 +1517,11 @@ class OpenemrEcsStack(Stack):
             # Grant read/write permissions to the aurora role to the S3 bucket
             self.export_bucket_rds.grant_read_write(aurora_s3_export_role)
 
+            # Attach the required AmazonRDSDataFullAccess policy for RDS export
+            aurora_s3_export_role.add_managed_policy(
+                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonRDSDataFullAccess")
+            )
+
             # Create an IAM role for SageMaker
             # Must start role name with "AmazonSageMaker" for all permissions to work.
             # For documentation see here:
@@ -1522,7 +1529,7 @@ class OpenemrEcsStack(Stack):
             sagemaker_role = iam.Role(
                 self,
                 "SageMakerExecutionRole",
-                role_name=f"AmazonSageMakerSMRole{unique_id}",
+                role_name=f"AmazonSageMakerSMRole{unique_id}{self.account}{self.region}",
                 assumed_by=iam.ServicePrincipal("sagemaker.amazonaws.com")
             )
 
@@ -1531,6 +1538,7 @@ class OpenemrEcsStack(Stack):
             self.export_bucket_efs.grant_read_write(sagemaker_role)
 
             # Create an EMR Serverless application
+            # We'll be able to submit Apache Spark jobs to this EMR cluster and run data analytics against our EMR data
             emr_app = emrserverless.CfnApplication(
                 self,
                 "EMRServerlessApp",
@@ -1540,31 +1548,33 @@ class OpenemrEcsStack(Stack):
             )
 
             # Create SageMaker Domain
+            # Use our KMS key to encrypt the domain.
+            # Only IAM users logged into the console with sufficient IAM permissions will be able to access anything.
+            # Enable RStudio in case anyone wants to use it for data analysis.
+            # Enable the option to share notebooks with an S3 bucket encrypted with our KMS key.
+            # Route all traffic through the VPC we've provisioned.
+            # Provide access to the EFS encrypted with our KMS key for our users to use for shared file storage.
             sagemaker_domain = sagemaker.CfnDomain(
                 self,
                 "OpenEMRSagemakerDomain",
                 auth_mode="IAM",
+                kms_key_id=self.analytics_kms_key.key_id,
                 default_user_settings=sagemaker.CfnDomain.UserSettingsProperty(
                     execution_role=sagemaker_role.role_arn,
-                    custom_file_system_configs=[
-                        sagemaker.CfnDomain.CustomFileSystemConfigProperty(
-                            efs_file_system_config=sagemaker.CfnDomain.EFSFileSystemConfigProperty(
-                                file_system_id=self.file_system_for_sagemaker.file_system_id,
-                                file_system_path="/share"
-                            ))
-                    ]
+                    r_studio_server_pro_app_settings=sagemaker.CfnDomain.RStudioServerProAppSettingsProperty(
+                        access_status="ENABLED",
+                        user_group="R_STUDIO_ADMIN"
+                    ),
+                    sharing_settings=sagemaker.CfnDomain.SharingSettingsProperty(
+                        notebook_output_option="Allowed",
+                        s3_kms_key_id=self.analytics_kms_key.key_id
+                    )
                 ),
+                app_network_access_type="VpcOnly",
                 default_space_settings=sagemaker.CfnDomain.DefaultSpaceSettingsProperty(
-                    execution_role=sagemaker_role.role_arn,
-                    custom_file_system_configs=[
-                        sagemaker.CfnDomain.CustomFileSystemConfigProperty(
-                            efs_file_system_config=sagemaker.CfnDomain.EFSFileSystemConfigProperty(
-                                file_system_id=self.file_system_for_sagemaker.file_system_id,
-                                file_system_path="/share"
-                            ))
-                    ]
+                    execution_role=sagemaker_role.role_arn
                 ),
-                domain_name="SagemakerEMRDomain",
+                domain_name="OpenEMRSageMakerDomain",
                 vpc_id=self.vpc.vpc_id,
                 subnet_ids=private_subnets_ids,
             )
@@ -1581,6 +1591,7 @@ class OpenemrEcsStack(Stack):
             )
 
             # Add EFS volume
+            # This volume configuration also enforces transit encryption.
             sync_efs_to_s3_task.add_volume(
                 name='SitesFolderVolume',
                 efs_volume_configuration=self.efs_volume_configuration_for_sites_folder
@@ -1608,7 +1619,7 @@ class OpenemrEcsStack(Stack):
                                                                     )
 
             # Create mount point for EFS for sites folder.
-            # Make read_only because we should not be writing here now; all we're doing is exporting from EFS to S3.
+            # Make read_only because we should not be writing here now; all we're doing is copying from EFS to S3.
             efs_mount_point_for_sites_folder = ecs.MountPoint(
                 container_path="/var/www/localhost/htdocs/openemr/sites/",
                 read_only=True,
@@ -1687,7 +1698,7 @@ class OpenemrEcsStack(Stack):
             self.analytics_kms_key.grant_encrypt_decrypt(sagemaker_role)
             self.analytics_kms_key.grant_encrypt_decrypt(sync_efs_to_s3_task.task_role)
 
-            # Add environment variable
+            # Add environment variables
             export_rds_to_s3_lambda.add_environment('DB_CLUSTER_ARN', self.db_instance.cluster_arn)
             export_rds_to_s3_lambda.add_environment('KMS_KEY_ID', self.analytics_kms_key.key_id)
             export_rds_to_s3_lambda.add_environment('S3_BUCKET_NAME', self.export_bucket_rds.bucket_name)
@@ -1714,10 +1725,6 @@ class OpenemrEcsStack(Stack):
             export_efs_to_s3_lambda.grant_invoke(sagemaker_role)
             export_rds_to_s3_lambda.grant_invoke(sagemaker_role)
 
-            # Add ability for the security group to access the EFS for sagemaker
-            self.file_system_for_sagemaker.connections.allow_default_port_from(self.efs_only_security_group)
-            self.file_system_for_sagemaker.connections.allow_default_port_to(self.efs_only_security_group)
-
             # Create a SageMaker user profile
             sagemaker_user = sagemaker.CfnUserProfile(
                 self,
@@ -1727,71 +1734,15 @@ class OpenemrEcsStack(Stack):
                 user_settings=sagemaker.CfnUserProfile.UserSettingsProperty(
                     security_groups=[self.efs_only_security_group.security_group_id],
                     execution_role=sagemaker_role.role_arn,
-                    custom_file_system_configs=[
-                        sagemaker.CfnUserProfile.CustomFileSystemConfigProperty(
-                            efs_file_system_config=sagemaker.CfnUserProfile.EFSFileSystemConfigProperty(
-                                file_system_id=self.file_system_for_sagemaker.file_system_id,
-                                file_system_path="/share"
-                            ))
-                    ]
+                    sharing_settings=sagemaker.CfnUserProfile.SharingSettingsProperty(
+                        notebook_output_option="Allowed",
+                        s3_kms_key_id=self.analytics_kms_key.key_id
+                    ),
+                    r_studio_server_pro_app_settings=sagemaker.CfnUserProfile.RStudioServerProAppSettingsProperty(
+                        access_status="ENABLED",
+                        user_group="R_STUDIO_ADMIN"
+                    )
                 )
-            )
-
-            # Grant the SageMaker role permissions to access EMR Serverless
-            emr_policy_statement = iam.PolicyStatement(
-                actions=[
-                    "emr-serverless:StartApplication",
-                    "emr-serverless:StopApplication",
-                    "emr-serverless:UpdateApplication",
-                    "emr-serverless:RunJob",
-                    "emr-serverless:CancelJobRun",
-                    "emr-serverless:GetJobRun",
-                    "emr-serverless:GetApplication",
-                    "emr-serverless:AccessLivyEndpoints",
-                    "emr-serverless:GetDashboardForJobRun"
-                ],
-                effect=iam.Effect.ALLOW,
-                resources=[f"arn:aws:emr-serverless:{self.region}:{self.account}:applications/{emr_app.ref}"],
-            )
-            sagemaker_role.add_to_policy(emr_policy_statement)
-
-            # Attach the required AmazonSageMakerFullAccess policy to our SageMaker role
-            sagemaker_role.add_managed_policy(
-                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerFullAccess")
-            )
-
-            # Attach the required AmazonSageMakerClusterInstanceRolePolicy policy to our SageMaker role
-            sagemaker_role.add_managed_policy(
-                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerClusterInstanceRolePolicy")
-            )
-
-            # Attach the required AmazonElasticFileSystemReadOnlyAccess policy to our SageMaker role
-            sagemaker_role.add_managed_policy(
-                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonElasticFileSystemReadOnlyAccess")
-            )
-
-            # Attach the required AmazonElasticFileSystemClientReadWriteAccess policy to our SageMaker role
-            sagemaker_role.add_managed_policy(
-                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonElasticFileSystemClientReadWriteAccess")
-            )
-
-            # Grant the SageMaker role permissions to run instances and jobs
-            emr_policy_statement = iam.PolicyStatement(
-                actions=[
-                    "sagemaker:CreateNotebookInstance",
-                    "sagemaker:CreateHyperParameterTuningJob",
-                    "sagemaker:CreateProcessingJob",
-                    "sagemaker:CreateTrainingJob",
-                    "sagemaker:CreateModel"
-                ],
-                effect=iam.Effect.ALLOW,
-                resources=["*"],
-            )
-            sagemaker_role.add_to_policy(emr_policy_statement)
-
-            # Attach the required AmazonRDSDataFullAccess policy for RDS export
-            aurora_s3_export_role.add_managed_policy(
-                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonRDSDataFullAccess")
             )
 
             # Create an IAM role with Glue permissions and permissions for EMR-serverless to assume
@@ -1801,7 +1752,7 @@ class OpenemrEcsStack(Stack):
             glue_role = iam.Role(
                 self,
                 "GlueRoleForEMRServerless",
-                role_name=f"AmazonSageMakerGlueRole{unique_id}",
+                role_name=f"AmazonSageMakerGlueRole{unique_id}{self.account}{self.region}",
                 assumed_by=iam.ServicePrincipal("emr-serverless.amazonaws.com"),  # EMR Serverless trust relationship
                 description="IAM Role with Glue permissions for EMR Serverless",
             )
@@ -1837,8 +1788,70 @@ class OpenemrEcsStack(Stack):
             self.export_bucket_rds.grant_read_write(glue_role)
             self.export_bucket_efs.grant_read_write(glue_role)
 
-            # Define the policy statements to allow sagemaker to integrate with emr serverless
+            # Attach the managed AmazonSageMakerFullAccess policy to our sagemaker role.
+            sagemaker_role.add_managed_policy(
+                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerFullAccess")
+            )
+
+            # Attach the managed AmazonSageMakerClusterInstanceRolePolicy policy to our sagemaker role.
+            sagemaker_role.add_managed_policy(
+                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerClusterInstanceRolePolicy")
+            )
+
+            # Attach the managed AmazonSageMakerFeatureStoreAccess policy to our sagemaker role.
+            sagemaker_role.add_managed_policy(
+                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerFeatureStoreAccess")
+            )
+
+            # Attach the managed AmazonSageMakerModelGovernanceUseAccess policy to our sagemaker role.
+            sagemaker_role.add_managed_policy(
+                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerModelGovernanceUseAccess")
+            )
+
+            # Attach the managed AmazonSageMakerModelRegistryFullAccess policy to our sagemaker role.
+            sagemaker_role.add_managed_policy(
+                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerModelRegistryFullAccess")
+            )
+
+            # Attach the managed AmazonSageMakerGroundTruthExecution policy to our sagemaker role.
+            sagemaker_role.add_managed_policy(
+                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerGroundTruthExecution")
+            )
+
+            # Attach the managed AmazonSageMakerPipelinesIntegrations policy to our sagemaker role.
+            sagemaker_role.add_managed_policy(
+                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerPipelinesIntegrations")
+            )
+
+            # Attach the managed AmazonSageMakerCanvasFullAccess policy to our sagemaker role.
+            sagemaker_role.add_managed_policy(
+                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerCanvasFullAccess")
+            )
+
+            # Define the policy statements to allow sagemaker to ...
+            # 1. Integrate with emr serverless.
+            # 2. Access custom container images published in the same account to ECR.
+            # 3. Use the KMS key created for the environment
+            # 4. Monitor exports from EFS to S3 (via ECS)
+            # 5. Monitor exports from RDS to S3 (via RDS export)
             policy_statements = [
+
+                # This allows us to access EMR serverless functions from the Sagemaker console
+                iam.PolicyStatement(
+                    actions=[
+                        "emr-serverless:StartApplication",
+                        "emr-serverless:StopApplication",
+                        "emr-serverless:UpdateApplication",
+                        "emr-serverless:RunJob",
+                        "emr-serverless:CancelJobRun",
+                        "emr-serverless:GetJobRun",
+                        "emr-serverless:GetApplication",
+                        "emr-serverless:AccessLivyEndpoints",
+                        "emr-serverless:GetDashboardForJobRun"
+                    ],
+                    effect=iam.Effect.ALLOW,
+                    resources=[f"arn:aws:emr-serverless:{self.region}:{self.account}:applications/{emr_app.ref}"],
+                ),
 
                 # This allows the listing of applications
                 iam.PolicyStatement(
@@ -1904,7 +1917,7 @@ class OpenemrEcsStack(Stack):
                     },
                 ),
 
-                # This allows some emr serverless actions that Sagemaker will need to integrate
+                # This allows some emr serverless actions that Sagemaker will need to enable the integration.
                 iam.PolicyStatement(
                     sid="EMRServerlessActions",
                     effect=iam.Effect.ALLOW,
@@ -1975,3 +1988,17 @@ class OpenemrEcsStack(Stack):
 
             # Attach the policy to the existing role
             policy.attach_to_role(sagemaker_role)
+
+            # Create SageMaker VPC Endpoints
+            self.sagemaker_api_interface_endpoint = self.vpc.add_interface_endpoint(
+                "sagemaker_api_interface_endpoint",
+                private_dns_enabled=True,
+                service=ec2.InterfaceVpcEndpointAwsService.SAGEMAKER_API,
+                subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS)
+            )
+            self.sagemaker_runtime_interface_endpoint = self.vpc.add_interface_endpoint(
+                "sagemaker_runtime_interface_endpoint",
+                private_dns_enabled=True,
+                service=ec2.InterfaceVpcEndpointAwsService.SAGEMAKER_RUNTIME,
+                subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS)
+            )
