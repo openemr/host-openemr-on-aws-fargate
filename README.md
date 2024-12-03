@@ -297,12 +297,46 @@ Next click on "Create Jupyterlab Space" in the upper right-hand corner of the co
 
 You'll have the option to create either a private or a public space. The only difference is that a private space gets allocated an EFS that only your user can access while a public space gets allocated an EFS that multiple users can access at the same time. Having said that this architecture will only provision a single user profile called "ServerlessAnalyticsUser". If you're planning to make any additional Sagemaker user profiles and wanted to share things between them I'd recommend using a public space. Otherwise, it doesn't matter what you choose here.
 
-![alt text](./docs/create_jupyterlab_space.png)
+![alt text](./docs/space_settings.png)
 
+On the next screen allocate as much as you'd like for storage space and then push the "run space" button.
 
+![alt text](./docs/running_the_space.png)
 
-    + [Other Apps](#other-apps)
-    + [Administering Access to the Environment](#administering-access-to-the-environment)
+Now an update box on the bottom will appear saying "Creating Jupyterlab application for space: `$YOUR_SPACE_NAME_HERE`" and then will change to "Successfully created Jupyterlab app for space: `$YOUR_SPACE_NAME_HERE`". This should take around 3 or 4 minutes.
+
+![alt text](./docs/creating_jupyterlab_application.png)
+
+![alt text](./docs/successfully_created_jupyterlab_application.png)
+
+Once that's done you'll have the ability to open up Jupyterlab from the main Jupyterlab menu by clicking on the "Open" button.
+
+![alt text](./docs/opening_jupyterlab.png)
+
+When the app first starts it can take up to 4-5 minutes to boot. This occurs while the kernel app is still booting and doing other things in the background. After around 30 minutes or so I find that it generally is quicker to open up a Jupyter notebook. Once it loads you'll see the screen below.
+
+![alt text](./docs/jupyterlab_notebook.png)
+
+Your automatically set home directory is on a shared customer-key owned KMS encrypted EFS volume that will autoscale up and down and persist data between sessions and as multiple people write to it. You can prove that this is the case by opening up a terminal in Jupyterlab and running "`printf "My home directory is on the EFS and here's proof:\n" && df -h``"; the output of which can be seen below.
+
+![alt text](./docs/home_directory_on_shared_encrypted_efs.png)
+
+### Other Apps
+
+While Jupyterlab is my favorite app in Sagemaker you have access to the full suite of tools and anything that can integrate with and submit jobs to our EMRServerless cluster is set up to do so.
+
+On the upper left-hand corner of the home screen in Sagemaker Studio you can see the 6 default apps you'll have available when you provision the environment. For reference these apps are:
+
+![alt text](./docs/default_applications.png)
+
+They are (in-order) ... :
+
+1. Jupyterlab<br />![alt text](./docs/jupyterlab.png)
+2. Rstudio (requires you to [purchase an RStudio license](https://docs.aws.amazon.com/sagemaker/latest/dg/rstudio-license.html) from RStudio PBC to use)<br />![alt text](./docs/rstudio.png)
+3. Canvas (where the Data Wrangler functionality I showed earlier is located)<br />![alt text](./docs/canvas.png)
+4. Code Editor<br />![alt text](./docs/code_editor.png)
+5. Studio Classic (will reach end of maintenance on December 31st 2024)<br />![alt text](./docs/studio_classic.png)
+6. MLFlow<br />![alt text](./docs/MLFlow.png)
 
 # Automating DNS Setup
 
