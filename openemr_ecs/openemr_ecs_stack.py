@@ -1473,6 +1473,15 @@ class OpenemrEcsStack(Stack):
                 resources=[self.analytics_kms_key.key_arn]
             )
 
+            # Create EFS for sagemaker
+            self.file_system_for_sagemaker = efs.FileSystem(
+                self,
+                "EfsFileSystemForSagemaker",
+                vpc=self.vpc,
+                encrypted=True,
+                removal_policy=RemovalPolicy.DESTROY,
+            )
+
             # Create an S3 bucket for rds export
             self.export_bucket_rds = s3.Bucket(self, "S3ExportBucket",
                 auto_delete_objects=True,
@@ -1536,7 +1545,24 @@ class OpenemrEcsStack(Stack):
                 "OpenEMRSagemakerDomain",
                 auth_mode="IAM",
                 default_user_settings=sagemaker.CfnDomain.UserSettingsProperty(
-                    execution_role=sagemaker_role.role_arn
+                    execution_role=sagemaker_role.role_arn,
+                    custom_file_system_configs=[
+                        sagemaker.CfnDomain.CustomFileSystemConfigProperty(
+                            efs_file_system_config=sagemaker.CfnDomain.EFSFileSystemConfigProperty(
+                                file_system_id=self.file_system_for_sagemaker.file_system_id,
+                                file_system_path="/share"
+                            ))
+                    ]
+                ),
+                default_space_settings=sagemaker.CfnDomain.DefaultSpaceSettingsProperty(
+                    execution_role=sagemaker_role.role_arn,
+                    custom_file_system_configs=[
+                        sagemaker.CfnDomain.CustomFileSystemConfigProperty(
+                            efs_file_system_config=sagemaker.CfnDomain.EFSFileSystemConfigProperty(
+                                file_system_id=self.file_system_for_sagemaker.file_system_id,
+                                file_system_path="/share"
+                            ))
+                    ]
                 ),
                 domain_name="SagemakerEMRDomain",
                 vpc_id=self.vpc.vpc_id,
@@ -1683,15 +1709,6 @@ class OpenemrEcsStack(Stack):
 
             # Add KMS policy statement
             export_rds_to_s3_lambda.add_to_role_policy(kms_policy_statement)
-
-            # Create EFS for sagemaker
-            self.file_system_for_sagemaker = efs.FileSystem(
-                self,
-                "EfsFileSystemForSagemaker",
-                vpc=self.vpc,
-                encrypted=True,
-                removal_policy=RemovalPolicy.DESTROY,
-            )
 
             # Grant permission for users to invoke the Lambdas
             export_efs_to_s3_lambda.grant_invoke(sagemaker_role)
