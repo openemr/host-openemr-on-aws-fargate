@@ -1563,7 +1563,7 @@ class OpenemrEcsStack(Stack):
             # This script syncs our EFS to the target s3 bucket
             command_array = [
             f"apk add --no-cache aws-cli \
-            && aws s3 sync /var/www/localhost/htdocs/openemr/sites/ s3://{self.export_bucket_efs.bucket_name} --delete"
+            && aws s3 sync /var/www/localhost/htdocs/openemr/sites/ s3://{self.export_bucket_efs.bucket_name}"
             ]
 
             # Add container definition for OpenEMR to the task that will be used to sync EFS to s3
