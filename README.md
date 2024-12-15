@@ -12,6 +12,11 @@
 - [Cost](#cost)
 - [Load Testing](#load-testing)
 - [Customizing Architecture Attributes](#customizing-architecture-attributes)
+- [Serverless Analytics Environment](#serverless-analytics-environment)
+    + [Importing OpenEMR Data into the Environment](#importing-openemr-data-into-the-environment)
+    + [Jupyterlab with Persistent Storage](#jupyterlab-with-persistent-storage)
+    + [Other Apps](#other-apps)
+    + [Administering Access to the Environment](#administering-access-to-the-environment)
 - [Automating DNS Setup](#automating-dns-setup)
 - [Enabling HTTPS for Client to Load Balancer Communication](#enabling-https-for-client-to-load-balancer-communication)
 - [How AWS Backup is Used in this Architecture](#how-aws-backup-is-used-in-this-architecture)
@@ -129,13 +134,13 @@ command.
 By default, if you run `cdk deploy`, the security group that is assigned to the load balancer won't be open to the public internet. This is for security purposes. Instead we need to allowlist an IP range using the cdk.json file. As an example:
 
 ```
-"security_group_ip_range": null
+"security_group_ip_range_ipv4": null
 ```
 
 could be set to
 
 ```
-"security_group_ip_range": "31.89.197.141/32",
+"security_group_ip_range_ipv4": "31.89.197.141/32",
 ```
 
 Which will give access to only `31.89.197.141`.
@@ -166,7 +171,6 @@ This solution uses a variety of AWS services including [Amazon ECS](https://aws.
 
 You'll pay for the AWS resources you use with this architecture but since that will depend on your level of usage we'll compute an estimate of the base cost of this architecture (this will vary from region to region).
 
-- Aurora Serverless v2 ($0.12/hour base cost) [(pricing docs)](https://aws.amazon.com/rds/aurora/pricing/)
 - AWS Fargate ($0.079/hour base cost) [(pricing docs)](https://aws.amazon.com/fargate/pricing/)
 - 1 Application Load Balancer ($0.0225/hour base cost) [(pricing docs)](https://aws.amazon.com/elasticloadbalancing/pricing/)
 - 2 NAT Gateways ($0.09/hour base cost) [(pricing docs)](https://aws.amazon.com/vpc/pricing/#:~:text=contiguous%20IPv4%20block-,NAT%20Gateway%20Pricing,-If%20you%20choose)
@@ -174,7 +178,7 @@ You'll pay for the AWS resources you use with this architecture but since that w
 - 2 Secrets Manager Secrets ($0.80/month) [(pricing docs)](https://aws.amazon.com/secrets-manager/pricing/)
 - 1 WAF ACL ($5/month) [(pricing docs)](https://aws.amazon.com/waf/pricing/)
 
-This works out to a base cost of $239.32/month. The true value of this architecture is its ability to rapidly autoscale and support even very large organizations. For smaller organizations you may want to consider looking at some of [OpenEMR's offerings in the AWS Marketplace](https://aws.amazon.com/marketplace/seller-profile?id=bec33905-edcb-4c30-b3ae-e2960a9a5ef4) which are more affordable.
+This works out to a base cost of $151.72/month. The true value of this architecture is its ability to rapidly autoscale and support even very large organizations. For smaller organizations you may want to consider looking at some of [OpenEMR's offerings in the AWS Marketplace](https://aws.amazon.com/marketplace/seller-profile?id=bec33905-edcb-4c30-b3ae-e2960a9a5ef4) which are more affordable.
 
 # Load Testing
 
@@ -205,6 +209,8 @@ RDS Metrics:<br />
 
 There are some additional parameters you can set in `cdk.json` that you can use to customize some attributes of your architecture.
 
+ * `security_group_ip_range_ipv4`       Set to a [IPV4 cidr](https://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing#IPv4_CIDR_blocks) to allow access to a group of IVP4 addresses (i.e. "0.0.0.0/0"). Defaults to "null" which allows no access to any IPV4 addresses.
+ * `security_group_ip_range_ipv6`       Set to a [IPV6 cidr](https://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing#IPv6_CIDR_blocks) to allow access to a group of IVP6 addresses (i.e. "::/0"). Defaults to "null" which allows no access to any IPV6 addresses.
  * `openemr_service_fargate_minimum_capacity`       Minimum number of fargate tasks running in your ECS cluster for your ECS service running OpenEMR. Defaults to 2.
  * `openemr_service_fargate_maximum_capacity`      Maximum number of fargate tasks running in your ECS cluster for your ECS service running OpenEMR. Defaults to 100.
  * `openemr_service_fargate_cpu_autoscaling_percentage`        Percent of average CPU utilization across your ECS cluster that will trigger an autoscaling event for your ECS service running OpenEMR. Defaults to 40.
@@ -217,6 +223,7 @@ There are some additional parameters you can set in `cdk.json` that you can use 
  * `open_smtp_port`          Setting this value to `"true"` will open up port 587 for outbound traffic from the ECS service. Defaults to "false".
  * `enable_global_accelerator`  Setting this value to `"true"` will create an [AWS global accelerator](https://aws.amazon.com/global-accelerator/) endpoint that you can use to more optimally route traffic over Amazon's edge network and deliver increased performance (especially to users who made be located far away from the region in which this architecture is created). More information on the AWS Global Accelerator integration with our architecture can be found in the [Using AWS Global Accelerator](#using-aws-global-accelerator) section of this documentation. Defaults to "false".
  * `enable_patient_portal`          Setting this value to `"true"` will enable the OpenEMR patient portal at ${your_installation_url}/portal. Defaults to "false".
+ * `create_serverless_analytics_environment`          Setting this value to `"true"` will create an attached serverless analytics environment with an EMRServerless Cluster, automated pipelines to export all data from OpenEMR into S3, and a fully functional SageMaker studio environment set up to leverage the EMRServerless Cluster for Apache Spark jobs and the OpenEMR data in S3 for machine learning.  More information on the serverless analytics environment can be found in the [Serverless Analytics Envrionment](#serverless-analytics-environment) section of this documentation. Defaults to "false".
 
 MySQL specific parameters:
 
@@ -237,6 +244,104 @@ The following parameters can be set to automate DNS management and email/SMTP se
 
 For documentation on how these parameters can be used see the [Automating DNS Setup](#automating-dns-setup) section of this guide.
 
+# Serverless Analytics Environment
+
+In an ideal world operating an EMR would not only be cheap, it would be profitable. The purpose of this serverless analytics environment is to enable large scale machine learning on the data within OpenEMR and to do so in a way that's not only HIPAA-eligible but also costs nothing unless you actually use the setup. You can leverage the full suite of [AWS Sagemaker](https://aws.amazon.com/sagemaker/?p=pm&c=sm&z=1) tools to train machine learning against your data in your OpenEMR installation within the environment. This way medical providers can train medical AIs using the data in their EMR setup and either release those as open-source or monetize them and in doing so may potentially find that running their EMR in this manner is not only cost-effective; it's profitable.
+
+Amazon Sagemaker is a [HIPAA eligible service](https://docs.aws.amazon.com/whitepapers/latest/architecting-hipaa-security-and-compliance-on-aws/amazon-sagemaker.html) and all data in SageMaker studio is [encrypted at rest by default](https://docs.aws.amazon.com/whitepapers/latest/sagemaker-studio-admin-best-practices/data-protection.html). Your entire SageMaker domain, any EFS file systems provisioned for your domain, and export S3 buckets are all encrypted with a unique customer-managed KMS key that's automatically provisioned for your AWS account.
+
+![alt text](./docs/sagemaker_studio_architecture.png)
+(credits to [this article](https://aws.amazon.com/blogs/machine-learning/use-langchain-with-pyspark-to-process-documents-at-massive-scale-with-amazon-sagemaker-studio-and-amazon-emr-serverless/) for the original version of the above diagram)
+
+In our architecture the Sagemaker domain exists within the same private subnets that host our application. The login page is accessed by navigating to `"https://<your-aws-region-here>.console.aws.amazon.com/sagemaker/home?region=<your-aws-region-here>#/studio-landing"` while logged into the console as a user with appropriate IAM permissions.
+
+When you navigate to the landing page you'll be greeted with the option to pick a user profile and get started. Select `"ServerlessAnalyticsUser"` from the dropdown and then click "Open Studio" to get started.
+![alt text](./docs/landing_page.png)
+
+Welcome to Sagemaker Studio! If you navigate to the `"Data"` section of the menu on the side you'll be able to see our EMRServerless cluster we can submit Spark jobs to.
+![alt text](./docs/emr_serverless_cluster.png)
+
+It's easiest to work with data in Sagemaker Studio when it's in an S3 bucket so there's two automated pipelines you can leverage to get data securely from OpenEMR into two S3 buckets accessible from Sagemaker Studio.
+
+You can export all of the files stored by the EMR to an S3 bucket you can read and write to from Sagemaker Studio. When the analytics environment is created there's a lambda made with the logical ID "EFStoS3ExportLambda" which when invoked will trigger a sync between the EFS and S3 with the logical ID "EFSExportBucket" and return an ECS task ID you can poll to monitor the state of the transfer. Your Sagemaker Studio profile has permissions to invoke the lambda, to describe the ECS task ID returned from the lambda and to read and write to/from the destination s3 bucket. 
+![alt text](./docs/efs_to_s3_export.png)
+
+You can export all of the contents of OpenEMR's RDS Aurora Serverless v2 MySQL database to an S3 bucket you can read and write to from Sagemaker Studio. When the analytics environment is created there's a lambda made with the logical ID "RDStoS3ExportLambda" which when invoked will trigger a sync between the RDS and S3 with the logical ID "S3ExportBucket" and return a response object for the `"start_export_task"` API call which can be parsed to find (amongst other potentially useful information) an RDS export task you can poll to monitor the state of the transfer. Your Sagemaker Studio profile has permissions to invoke the lambda, to describe the RDS export task ID returned from the lambda and to read and write to/from the destination s3 bucket. 
+![alt text](./docs/rds_to_s3_export.png)
+
+Both transfer jobs are idempotent and can be run while the system is live with no downtime. The whole environment costs no money unless you choose to provision and use compute resources in it; for as long as it sits idle you will incur zero costs. If you do choose to use it you can find SageMaker pricing documentation [here](https://aws.amazon.com/sagemaker/pricing/?p=pm&c=sm&z=2).
+
+### Importing OpenEMR Data into the Environment
+
+Start by invoking at least one of the export Lambdas mentioned above. For the purposes of this demo we're going to use the Lambda that exports the OpenEMR sites directory from EFS to S3. If you have permissions you can invoke it from the console. It will take around ~3-4 seconds to successfully complete.
+
+![alt text](./docs/successful_invocation.png)
+
+That will launch a tiny (0.25 vCPU; 0.5GB) graviton Fargate task that will run until all the data is copied over. Your SageMaker execution role has permissions to describe this ECS task and you can poll it if you'd like to get up to date reports on its status. This ECS task's runtime will depend on how much file storage your OpenEMR installation is using. When it's done you can see the contents have been copied to the S3 bucket.
+
+![alt text](./docs/contents_trasnferred_to_S3.png)
+
+Your Sagemaker execution role has read and write access to both of the export S3 buckets (the one pictured above is for file exports from OpenEMR; the other one is for MySQL/RDS exports from OpenEMR which will appear as a bunch of [Apache Parquet](https://github.com/apache/parquet-format) files that are ready for you to run [Apache Spark](https://spark.apache.org/) jobs against with your EMRServerless cluster) and we now have many ways available to us to import data into Sagemaker for use in our applications. My preferred method is using [Data Wrangler](https://aws.amazon.com/sagemaker/data-wrangler/), which is accessible in the Sagemaker Canvas console, because then you can use a UI and then just click on the S3 bucket and the items you want to download but you could also do this programmatically from a Jupyterlab notebook or a number of other ways with other apps.
+
+![alt text](./docs/data_wrangler.png)
+
+### Jupyterlab with Persistent Storage
+
+As someone who has professionally managed a Jupyterhub server in the past I can confidently say that my favorite Sagemaker feature is its Jupyterlab app. It comes setup by default and has persistent storage via a shared EFS volume and comes ready with a bunch of coding tools you can use to get started doing data analysis. To get started let's log in to Sagemaker Studio; then in the home screen click on the Jupyterlab app in the upper left hand corner of the screen.
+
+![alt text](./docs/jupyterlab_app_location.png)
+
+Next click on "Create Jupyterlab Space" in the upper right-hand corner of the console.
+
+![alt text](./docs/create_jupyterlab_space.png)
+
+You'll have the option to create either a private or a public space. The only difference is that a private space gets allocated an EFS that only your user can access while a public space gets allocated an EFS that multiple users can access at the same time. Having said that this architecture will only provision a single user profile called "ServerlessAnalyticsUser". If you're planning to make any additional Sagemaker user profiles and wanted to share things between them I'd recommend using a public space. Otherwise, it doesn't matter what you choose here.
+
+![alt text](./docs/space_settings.png)
+
+On the next screen allocate as much as you'd like for storage space and then push the "run space" button.
+
+![alt text](./docs/running_the_space.png)
+
+Now an update box on the bottom will appear saying "Creating Jupyterlab application for space: `$YOUR_SPACE_NAME_HERE`" and then will change to "Successfully created Jupyterlab app for space: `$YOUR_SPACE_NAME_HERE`". This should take around 3 or 4 minutes.
+
+![alt text](./docs/creating_jupyterlab_application.png)
+
+![alt text](./docs/successfully_created_jupyterlab_application.png)
+
+Once that's done you'll have the ability to open up Jupyterlab from the main Jupyterlab menu by clicking on the "Open" button.
+
+![alt text](./docs/opening_jupyterlab.png)
+
+When the app first starts it can take up to 4-5 minutes to boot. This occurs while the kernel app is still booting and doing other things in the background. After around 30 minutes or so I find that it generally is quicker to open up a Jupyter notebook. Once it loads you'll see the screen below.
+
+![alt text](./docs/jupyterlab_notebook.png)
+
+Your automatically set home directory is on a shared customer-key owned KMS encrypted EFS volume that will autoscale up and down and persist data between sessions and as multiple people write to it. You can prove that this is the case by opening up a terminal in Jupyterlab and running "`printf "My home directory is on the EFS and here's proof:\n" && df -h``"; the output of which can be seen below.
+
+![alt text](./docs/home_directory_on_shared_encrypted_efs.png)
+
+### Other Apps
+
+While Jupyterlab is my favorite app in Sagemaker you have access to the full suite of tools and anything that can integrate with and submit jobs to our EMRServerless cluster is set up to do so.
+
+On the upper left-hand corner of the home screen in Sagemaker Studio you can see the 6 default apps you'll have available when you provision the environment. For reference these apps are:
+
+![alt text](./docs/default_applications.png)
+
+They are (in-order) ... :
+
+1. Jupyterlab<br />![alt text](./docs/jupyterlab.png)
+2. Rstudio (requires you to [purchase an RStudio license](https://docs.aws.amazon.com/sagemaker/latest/dg/rstudio-license.html) from RStudio PBC to use)<br />![alt text](./docs/rstudio.png)
+3. Canvas (where the Data Wrangler functionality I showed earlier is located)<br />![alt text](./docs/canvas.png)
+4. Code Editor<br />![alt text](./docs/code_editor.png)
+5. Studio Classic (will reach end of maintenance on December 31st 2024)<br />![alt text](./docs/studio_classic.png)
+6. MLFlow<br />![alt text](./docs/MLFlow.png)
+
+### Administering Access to the Environment
+
+Access is controlled to the serverless analytics environment by AWS IAM. All of the functionality above requires IAM permissions and this functionality can be entirely or partially removed by restricting these permissions. Good documentation regarding best practices for IAM management as it relates to Sagemaker can be found [here](https://docs.aws.amazon.com/whitepapers/latest/sagemaker-studio-admin-best-practices/permissions-management.html).
+
 # Automating DNS Setup
 
 Note: to use SES with OpenEMR to send emails you will need to follow [the documentation from AWS to take your account out of SES sandbox mode](https://docs.aws.amazon.com/ses/latest/dg/request-production-access.html) (when you create an AWS account it starts out in sandbox mode by default).
@@ -256,6 +361,12 @@ Once you get your SMTP credentials functioning and you follow the instructions l
 ![alt text](./docs/testemail.php_output.png)
 
 if `route53_domain` is set and `configure_ses` is set to "true" and `email_forwarding_address` is changed from null to an external email address you'd like to forward email to (i.e. target-email@example.com) the architecture will set up an email that you can use to forward email to that address. The email address will be help@${route53.domain} (i.e. help@emr-testing.com) and emailing it will archive the message in an encrypted S3 bucket and forward a copy to the external email specified.
+
+If you'd like to rotate the SMTP credentials you can:
+1. Rotate the credentials for the IAM user `"ses-smtp-user"`.
+2. Invoke the `SMTPSetup` lambda.
+3. Update the OpenEMR ECS Service.
+4. Using the OpenEMR admin user save the new notification configuration with the updated SMTP password.
 
 Using these services will incur extra costs. See here for pricing information on [route53](https://aws.amazon.com/route53/pricing/), [AWS Certificate Manager](https://aws.amazon.com/certificate-manager/pricing/), and [AWS SES](https://aws.amazon.com/ses/pricing/). 
 
@@ -337,6 +448,8 @@ There's a script named "test_data_api.py" found in the "scripts" folder that wil
 Note that using this functionality will incur extra costs. Information on pricing for the RDS Data API can be found [here](https://aws.amazon.com/rds/aurora/pricing/?refid=d0d2d16d-a4b1-420d-b102-bf8ef4afa0c9#Data_API_costs).
 
 # Aurora ML for AWS Bedrock
+
+Note: Not all integrations are enabled for all versions of the Aurora MySQL engine at all times. New engine versions often don't ship with features like the Bedrock integration enabled but instead have them enabled later. We try to keep the MySQL engine set by default to one of the more recent versions of the engine. If you want to enable this feature you may need to change the MySQL engine version to a previous version. If you need to do this change the `"self.aurora_mysql_engine_version"` variable in [openemr_ecs_stack.py](https://github.com/openemr/host-openemr-on-aws-fargate/blob/main/openemr_ecs/openemr_ecs_stack.py). 
 
 You can toggle on and off the [Aurora ML for AWS Bedrock Integration](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/mysql-ml.html#using-amazon-bedrock) by setting the "enable_bedrock_integration" parameter in the "cdk.json" file.
 

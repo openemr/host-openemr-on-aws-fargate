@@ -195,3 +195,47 @@ def make_ruleset_active(event, context):
             'Content-Type': 'text/plain'
         }
     }
+
+def export_from_rds_to_s3(event, context):
+    # Initialize client
+    client = boto3.client('rds')
+
+    # Start export from RDS to S3
+    response = client.start_export_task(
+        ExportTaskIdentifier='aurora-to-s3-openemr-export',
+        KmsKeyId=os.environ['KMS_KEY_ID'],
+        SourceArn=os.environ['DB_CLUSTER_ARN'],
+        S3BucketName=os.environ['S3_BUCKET_NAME'],
+        IamRoleArn=os.environ['EXPORT_ROLE_ARN']
+    )
+    return response
+
+def sync_efs_to_s3(event, context):
+    #Create ECS client
+    ecs_client = boto3.client('ecs')
+
+    #Get environment variables
+    cluster = os.environ['ECS_CLUSTER']
+    task_definition = os.environ['TASK_DEFINITION']
+    security_groups = os.environ['SECURITY_GROUPS'].split(',')
+    subnets = os.environ['SUBNETS'].split(',')
+
+    #Run ECS task
+    response = ecs_client.run_task(
+        cluster=cluster,
+        launchType='FARGATE',
+        taskDefinition=task_definition,
+        count=1,
+        networkConfiguration={
+            'awsvpcConfiguration': {
+                'securityGroups': security_groups,
+                'subnets': subnets
+            }
+        }
+    )
+
+    #Get TaskARN
+    task_arn = response["tasks"][0]['taskArn']
+
+    #Return TaskARN
+    return task_arn
