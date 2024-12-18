@@ -9,6 +9,7 @@ from aws_cdk import (
     aws_iam as iam,
     aws_elasticloadbalancingv2 as elb,
     aws_elasticache as elasticache,
+    aws_cloudtrail as cloudtrail,
     aws_logs as logs,
     aws_kms as kms,
     aws_ecs_patterns as ecs_patterns,
@@ -56,6 +57,7 @@ class OpenemrEcsStack(Stack):
         self._create_vpc()
         self._create_security_groups()
         self._create_elb_log_bucket()
+        self._create_cloudtrail_logging_bucket()
         self._create_alb()
         self._create_and_configure_dns_and_certificates()
         self._configure_ses()
@@ -129,6 +131,61 @@ class OpenemrEcsStack(Stack):
         )
 
         self.elb_log_bucket.add_to_resource_policy(policy_statement)
+
+    def _create_cloudtrail_logging_bucket(self):
+
+        if self.node.try_get_context("enable_long_term_cloudtrail_monitoring") == "true":
+
+            # Create a key and give cloudwatch logs, cloudtrail and s3 permissions to use it
+            self.cloudtrail_kms_key = kms.Key(self, "CloudtrailKmsKey", enable_key_rotation=True)
+            self.cloudtrail_kms_key.grant_encrypt_decrypt(iam.ServicePrincipal("logs." + self.region + ".amazonaws.com"))
+            self.cloudtrail_kms_key.grant_encrypt_decrypt(iam.ServicePrincipal("s3.amazonaws.com"))
+            self.cloudtrail_kms_key.grant_encrypt_decrypt(iam.ServicePrincipal("cloudtrail.amazonaws.com"))
+
+            # Create an S3 bucket for CloudTrail logs
+            self.cloudtrail_log_bucket = s3.Bucket(
+                self,
+                "CloudTrailLogBucket",
+                versioned=True,
+                encryption_key=self.cloudtrail_kms_key,
+                block_public_access=s3.BlockPublicAccess.BLOCK_ALL
+            )
+
+            # Add lifecycle policy to retain logs for 7 years
+            self.cloudtrail_log_bucket.add_lifecycle_rule(
+                id="Retain7Years",
+                enabled=True,
+                expiration=Duration.days(7 * 365),  # Expire objects after 7 years
+                transitions=[
+                    s3.Transition(
+                        storage_class=s3.StorageClass.GLACIER,
+                        transition_after=Duration.days(90),  # Move to Glacier after 90 days
+                    )
+                ]
+            )
+
+            # Create a CloudTrail trail
+            self.trail = cloudtrail.Trail(
+                self,
+                "OpenEMRCloudTrail",
+                bucket=self.cloudtrail_log_bucket,
+                encryption_key=self.cloudtrail_kms_key,
+                include_global_service_events=True,
+                cloud_watch_logs_retention=logs.RetentionDays.NINE_YEARS,
+                management_events=cloudtrail.ReadWriteType.ALL,
+            )
+
+            # Grant CloudTrail permissions to write to the bucket
+            self.cloudtrail_log_bucket.add_to_resource_policy(
+                iam.PolicyStatement(
+                    actions=["s3:PutObject", "s3:GetBucketAcl"],
+                    resources=[
+                        self.cloudtrail_log_bucket.arn_for_objects("*"),
+                        self.cloudtrail_log_bucket.bucket_arn,
+                    ],
+                    principals=[iam.ServicePrincipal("cloudtrail.amazonaws.com")],
+                )
+            )
 
     def _create_backup(self):
         plan = backup.BackupPlan.daily_weekly_monthly7_year_retention(self, "Plan")
