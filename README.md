@@ -172,7 +172,7 @@ This solution uses a variety of AWS services including [Amazon ECS](https://aws.
 You'll pay for the AWS resources you use with this architecture but since that will depend on your level of usage we'll compute an estimate of the base cost of this architecture (this will vary from region to region).
 
 - AWS Fargate ($0.079/hour base cost) [(pricing docs)](https://aws.amazon.com/fargate/pricing/)
-- 1 Application Load Bala*ncer ($0.0225/hour base cost) [(pricing docs)](https://aws.amazon.com/elasticloadbalancing/pricing/)
+- 1 Application Load Balancer ($0.0225/hour base cost) [(pricing docs)](https://aws.amazon.com/elasticloadbalancing/pricing/)
 - 2 NAT Gateways ($0.09/hour base cost) [(pricing docs)](https://aws.amazon.com/vpc/pricing/#:~:text=contiguous%20IPv4%20block-,NAT%20Gateway%20Pricing,-If%20you%20choose)
 - Elasticache Serverless ($0.0084/hour base cost) [(pricing docs)](https://aws.amazon.com/elasticache/pricing/)
 - 2 Secrets Manager Secrets ($0.80/month) [(pricing docs)](https://aws.amazon.com/secrets-manager/pricing/)
