@@ -177,8 +177,9 @@ You'll pay for the AWS resources you use with this architecture but since that w
 - Elasticache Serverless ($0.0084/hour base cost) [(pricing docs)](https://aws.amazon.com/elasticache/pricing/)
 - 2 Secrets Manager Secrets ($0.80/month) [(pricing docs)](https://aws.amazon.com/secrets-manager/pricing/)
 - 1 WAF ACL ($5/month) [(pricing docs)](https://aws.amazon.com/waf/pricing/)
+- 1 KMS Key ($1/month) [(pricing docs)](https://aws.amazon.com/kms/pricing/)
 
-This works out to a base cost of $151.72/month. The true value of this architecture is its ability to rapidly autoscale and support even very large organizations. For smaller organizations you may want to consider looking at some of [OpenEMR's offerings in the AWS Marketplace](https://aws.amazon.com/marketplace/seller-profile?id=bec33905-edcb-4c30-b3ae-e2960a9a5ef4) which are more affordable.
+This works out to a base cost of $152.72/month. The true value of this architecture is its ability to rapidly autoscale and support even very large organizations. For smaller organizations you may want to consider looking at some of [OpenEMR's offerings in the AWS Marketplace](https://aws.amazon.com/marketplace/seller-profile?id=bec33905-edcb-4c30-b3ae-e2960a9a5ef4) which are more affordable.
 
 # Load Testing
 
@@ -215,6 +216,7 @@ There are some additional parameters you can set in `cdk.json` that you can use 
  * `openemr_service_fargate_maximum_capacity`      Maximum number of fargate tasks running in your ECS cluster for your ECS service running OpenEMR. Defaults to 100.
  * `openemr_service_fargate_cpu_autoscaling_percentage`        Percent of average CPU utilization across your ECS cluster that will trigger an autoscaling event for your ECS service running OpenEMR. Defaults to 40.
  * `openemr_service_fargate_memory_autoscaling_percentage`        Percent of average memory utilization across your ECS cluster that will trigger an autoscaling event for your ECS service running OpenEMR. Defaults to 40.
+ * `enable_long_term_cloudtrail_monitoring`        By default the architecture comes with a Cloudtrail Trail that logs all events in the same region the architecture is deployed to and stores them in Cloudwatch Logs for 9 years in addition to storing them in S3 for 7 years. You can choose to disable this for testing but we would recommend leaving it enabled for production settings. Defaults to "true".
  * `enable_ecs_exec`          Can be used to toggle ECS Exec functionality. Set to a value other than "true" to disable this functionality. Please note that this should generally be disabled and only enabled as needed. Defaults to "false".
  * `certificate_arn`          If specified will enable HTTPS for client to load balancer communications and will associate the specified certificate with the application load balancer for this architecture. This value, if specified, should be a string of an ARN in AWS Certificate Manager.
  * `activate_openemr_apis`          Setting this value to `"true"` will enable both the [REST](https://github.com/openemr/openemr/blob/master/API_README.md) and [FHIR](https://github.com/openemr/openemr/blob/master/FHIR_README.md) APIs. You'll need to authorize and generate a token to use most of the functionality of both APIs. Documentation on how authorization works can be found [here](https://github.com/openemr/openemr/blob/master/API_README.md#authorization). When the OpenEMR APIs are activated the `"/apis/"` and `"/oauth2"` paths will be accessible. To disable the REST and FHIR APIs for OpenEMR set this value to something other than "true". For more information about this functionality see the `REST and FHIR APIs` section of this documention. Defaults to "false".
