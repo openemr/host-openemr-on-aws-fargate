@@ -218,7 +218,6 @@ class OpenemrEcsStack(Stack):
             self,
             "Password",
             generate_secret_string=secretsmanager.SecretStringGenerator(
-                exclude_punctuation=True,
                 include_space=False,
                 secret_string_template='{"username": "admin"}',
                 generate_string_key="password"
