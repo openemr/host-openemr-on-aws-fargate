@@ -23,7 +23,7 @@ Transform your healthcare facility with enterprise-grade EHR system at a fractio
 - **Zero infrastructure management required**
 
 ## Architecture 
-![OpenEMR AWS Fargate Architecture](../docs/Architecture.png)
+![OpenEMR AWS Fargate Architecture](./docs/Architecture.png)
 
 ### Component Relationships
 | Component | Purpose | Connects To | Scaling |
